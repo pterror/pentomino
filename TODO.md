@@ -35,6 +35,16 @@
   advantage over SAT: torus translational symmetry means one learned
   pattern fires at all rows×cols positions simultaneously.
 
+  Piece representation: instead of enumerating explicit placements,
+  define each piece type by *local rules* (e.g. I = no bends, no T/X
+  junctions, dead ends don't touch, exactly 3 consecutive straights).
+  Each cell tracks which local configurations are still possible at each
+  edge; propagation is arc consistency over this local constraint graph.
+  "When every tile variant is a contradiction, declare no solution."
+  This is fundamentally different from the SAT encoding (which uses one
+  variable per global (color, placement) pair) — it operates locally and
+  can exploit piece structure directly.
+
 - **Graph-based approach** — several angles worth exploring:
   - The placement conflict graph (nodes = placements, edges = overlap or
     same-color adjacency) is exactly what the SAT clauses encode.  A
