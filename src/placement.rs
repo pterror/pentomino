@@ -41,9 +41,13 @@ use std::collections::HashSet;
 #[derive(Debug, Clone)]
 pub struct Placement {
     pub piece_type: PieceType,
-    /// Cells covered, in the order they appear in the orientation template.
+    /// Torus cells covered, in the order they appear in the orientation template.
     /// The *sorted* version of this is unique across all placements.
     pub cells: Vec<(usize, usize)>,
+    /// Original plane coordinates (before torus wrapping), same order as `cells`.
+    /// Used for display: always shows the correct piece shape regardless of
+    /// how the piece wraps on the torus.
+    pub plane_cells: Vec<(i32, i32)>,
 }
 
 /// Map a plane coordinate `(plane_r, plane_c)` to a torus cell `(r, c)`.
@@ -158,6 +162,7 @@ pub fn enumerate_placements(
                         placements.push(Placement {
                             piece_type: *piece_type,
                             cells,
+                            plane_cells,
                         });
                     }
                 }

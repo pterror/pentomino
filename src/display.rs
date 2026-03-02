@@ -15,10 +15,9 @@
 //! # SVG
 //!   `write_svg` — 40×40 px per cell, piece boundaries as thick strokes.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 
 use crate::pentomino::PieceType;
-use crate::placement::to_torus;
 use crate::solver::Solution;
 
 // ── Color palettes ────────────────────────────────────────────────────────────
@@ -67,60 +66,13 @@ fn svg_fill(color: usize) -> &'static str {
     SVG_PALETTE[color % SVG_PALETTE.len()]
 }
 
-// ── Piece unfolding ───────────────────────────────────────────────────────────
-//
-// A piece's 5 torus cells form a connected pentomino on the torus.  When
-// stored as torus coordinates some cells may "wrap" — e.g. for a horizontal
-// I-piece at anchor column 8 on a 10-wide torus the cells are (r,8),(r,9),
-// (r,0),(r,1),(r,2) which look disconnected in a flat grid.
-//
-// BFS-unfolding assigns each cell a plane position by stepping in the natural
-// plane direction (right=+1 col, down=+1 row, …) from an already-placed
-// neighbour, without caring about torus wrapping.  The result is always the
-// original connected pentomino shape.
-
-/// BFS-unfold a set of torus cells belonging to one piece.
-/// Returns plane (row, col) for each cell, in the same order as `cells`.
-///
-/// The anchor (lexicographic min) is placed at its own torus coordinates.
-/// BFS walks the four plane directions (right, left, down, up) from each
-/// placed cell: the neighboring plane position is mapped back to a torus cell
-/// via `to_torus`; if that torus cell is in the piece and not yet placed, it
-/// gets assigned the neighboring plane position.
-///
-/// This correctly handles oblique tori where plane-adjacent cells do NOT have
-/// the same torus-adjacency as the four-neighbor `neighbours()` relation.
-fn unfold_piece(
-    cells: &[(usize, usize)],
-    rows: usize,
-    cols: usize,
-    shear: usize,
-) -> Vec<(i32, i32)> {
-    let cell_set: HashSet<(usize, usize)> = cells.iter().cloned().collect();
-    let mut plane_of: HashMap<(usize, usize), (i32, i32)> = HashMap::new();
-    let mut queue: VecDeque<(usize, usize)> = VecDeque::new();
-
-    let &anchor = cells.iter().min().unwrap();
-    plane_of.insert(anchor, (anchor.0 as i32, anchor.1 as i32));
-    queue.push_back(anchor);
-
-    while let Some(tcell) = queue.pop_front() {
-        let (pr, pc) = plane_of[&tcell];
-
-        for (dr, dc) in [(0i32, 1i32), (0, -1), (1, 0), (-1, 0)] {
-            let nplane = (pr + dr, pc + dc);
-            let ntorus = to_torus(nplane.0, nplane.1, rows, cols, shear);
-            if cell_set.contains(&ntorus) && !plane_of.contains_key(&ntorus) {
-                plane_of.insert(ntorus, nplane);
-                queue.push_back(ntorus);
-            }
-        }
-    }
-
-    cells.iter().map(|c| *plane_of.get(c).unwrap()).collect()
-}
-
 // ── Plane display grid ────────────────────────────────────────────────────────
+//
+// Each piece's plane coordinates are taken directly from the placement's
+// original plane_cells (stored during enumeration, before torus wrapping).
+// This correctly shows the actual piece shape on oblique tori where BFS
+// unfolding can fail (e.g. on 1-row tori "down" and "left" map to the same
+// torus cell, causing BFS to flatten all pieces to horizontal strips).
 
 struct CellInfo {
     piece_id: usize, // unique per piece placement — used for border detection
@@ -128,33 +80,31 @@ struct CellInfo {
     ty: PieceType,
 }
 
-/// Build a plane display grid by BFS-unfolding each piece exactly once.
-/// Returns the grid (row-major) sized to the bounding box of all unfolded cells.
-fn plane_display(
-    sol: &Solution,
-    rows: usize,
-    cols: usize,
-    shear: usize,
-) -> Vec<Vec<Option<CellInfo>>> {
-    // Group torus cells by piece placement id.
-    let mut piece_cells: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
+/// Build a plane display grid using the stored plane_cells from each placement.
+/// Returns the grid (row-major) sized to the bounding box of all cells.
+fn plane_display(sol: &Solution, rows: usize, cols: usize) -> Vec<Vec<Option<CellInfo>>> {
+    // Collect color/type for each piece_id from the torus grid.
+    let mut piece_color: HashMap<usize, usize> = HashMap::new();
+    let mut piece_type_map: HashMap<usize, PieceType> = HashMap::new();
     for tr in 0..rows {
         for tc in 0..cols {
             if let Some(pid) = sol.grid_piece[tr][tc] {
-                piece_cells.entry(pid).or_default().push((tr, tc));
+                piece_color
+                    .entry(pid)
+                    .or_insert_with(|| sol.grid_color[tr][tc].unwrap_or(0));
+                piece_type_map
+                    .entry(pid)
+                    .or_insert_with(|| sol.grid_type[tr][tc].unwrap_or(PieceType::X));
             }
         }
     }
 
-    // Unfold each piece to get plane coords; collect all plane cells.
-    // Each entry: (plane_r, plane_c, piece_id, color, type)
+    // Use stored plane_cells directly — no BFS unfolding needed.
     let mut all: Vec<(i32, i32, usize, usize, PieceType)> = Vec::new();
-
-    for (&pid, cells) in &piece_cells {
-        let (tr0, tc0) = cells[0];
-        let color = sol.grid_color[tr0][tc0].unwrap_or(0);
-        let ty = sol.grid_type[tr0][tc0].unwrap_or(PieceType::X);
-        for &(pr, pc) in &unfold_piece(cells, rows, cols, shear) {
+    for (&pid, plane_cells) in &sol.piece_plane_cells {
+        let color = piece_color.get(&pid).copied().unwrap_or(0);
+        let ty = piece_type_map.get(&pid).copied().unwrap_or(PieceType::X);
+        for &(pr, pc) in plane_cells {
             all.push((pr, pc, pid, color, ty));
         }
     }
@@ -215,8 +165,8 @@ fn type_char(t: Option<PieceType>) -> char {
 /// Each piece is BFS-unfolded from the torus so its shape is always connected
 /// and rendered exactly once.  Empty cells (outside the irregular boundary)
 /// are shown as spaces.
-pub fn print_colored(sol: &Solution, rows: usize, cols: usize, shear: usize) {
-    let grid = plane_display(sol, rows, cols, shear);
+pub fn print_colored(sol: &Solution, rows: usize, cols: usize, _shear: usize) {
+    let grid = plane_display(sol, rows, cols);
     if grid.is_empty() {
         return;
     }
@@ -250,7 +200,7 @@ pub fn write_svg(
     shear: usize,
     path: &str,
 ) -> std::io::Result<()> {
-    let grid = plane_display(sol, rows, cols, shear);
+    let grid = plane_display(sol, rows, cols);
     if grid.is_empty() {
         return Ok(());
     }

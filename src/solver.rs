@@ -41,6 +41,9 @@ pub struct Solution {
     pub grid_color: Vec<Vec<Option<usize>>>,
     /// Which global placement variable covers each cell (for coloring in display).
     pub grid_piece: Vec<Vec<Option<usize>>>,
+    /// Original plane coordinates for each cell, keyed by global placement index.
+    /// Maps piece_id → Vec<(plane_r, plane_c)> in the same cell order as the placement.
+    pub piece_plane_cells: std::collections::HashMap<usize, Vec<(i32, i32)>>,
 }
 
 // ── Shared problem setup ──────────────────────────────────────────────────────
@@ -257,6 +260,115 @@ pub fn treewidth_upper_bound(
     Some((max_clique.saturating_sub(1), tw_upper))
 }
 
+// ── Arc-consistency propagation ───────────────────────────────────────────────
+
+/// Eliminate placements that are provably dead: if using placement p would
+/// leave some other cell with zero remaining viable coverings, then p can never
+/// be part of any solution and is removed.
+///
+/// This is strictly stronger than SAT unit propagation: it prunes placements
+/// whose use would create an uncoverable cell, even when that cell currently
+/// has multiple candidates (which unit propagation wouldn't touch yet).
+///
+/// Runs to fixpoint. Returns `None` if any cell is left with zero candidates
+/// (problem is UNSAT). Otherwise returns `(alive, n_eliminated)`.
+fn arc_consistency(
+    n: usize,
+    global: &[(usize, crate::placement::Placement)],
+    cell_to_vars: &[Vec<usize>],
+    conflict_pairs: &HashSet<(usize, usize)>,
+    cols: usize,
+    initial_dead: &[bool],
+) -> Option<(Vec<bool>, usize)> {
+    let mut alive: Vec<bool> = initial_dead.iter().map(|&d| !d).collect();
+    let total_initial_dead = initial_dead.iter().filter(|&&d| d).count();
+
+    // Build combined conflict adjacency: exact-cover overlap + same-color adjacency.
+    let mut adj: Vec<Vec<usize>> = vec![vec![]; n];
+    for covers in cell_to_vars {
+        for (a, &i) in covers.iter().enumerate() {
+            for &j in &covers[a + 1..] {
+                adj[i].push(j);
+                adj[j].push(i);
+            }
+        }
+    }
+    for &(i, j) in conflict_pairs {
+        adj[i].push(j);
+        adj[j].push(i);
+    }
+    for a in adj.iter_mut() {
+        a.sort_unstable();
+        a.dedup();
+    }
+
+    // Cell indices (flat: r*cols+c) covered by each placement.
+    let p_cells: Vec<Vec<usize>> = global
+        .iter()
+        .map(|(_, p)| p.cells.iter().map(|&(r, c)| r * cols + c).collect())
+        .collect();
+
+    // Reusable bitvector — avoids per-iteration allocations.
+    let mut killed = vec![false; n];
+    let mut total_eliminated = total_initial_dead;
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+
+        'next_placement: for p in 0..n {
+            if !alive[p] {
+                continue;
+            }
+
+            // Mark everything killed by using p.
+            for &q in &adj[p] {
+                if alive[q] {
+                    killed[q] = true;
+                }
+            }
+
+            // For each cell covered by a killed placement (but not by p itself),
+            // check whether any alive + non-killed covering remains.
+            for &q in &adj[p] {
+                if !killed[q] {
+                    continue; // q is already dead; its cells were already considered
+                }
+                for &cell in &p_cells[q] {
+                    if p_cells[p].contains(&cell) {
+                        continue; // p covers this cell — satisfied
+                    }
+                    if !cell_to_vars[cell].iter().any(|&r| alive[r] && !killed[r]) {
+                        // Using p would leave `cell` uncoverable — p is dead.
+                        alive[p] = false;
+                        changed = true;
+                        total_eliminated += 1;
+                        // Reset bitvector before moving on.
+                        for &q2 in &adj[p] {
+                            killed[q2] = false;
+                        }
+                        continue 'next_placement;
+                    }
+                }
+            }
+
+            // Reset bitvector.
+            for &q in &adj[p] {
+                killed[q] = false;
+            }
+        }
+    }
+
+    // Final feasibility: every cell must still have at least one alive covering.
+    for covers in cell_to_vars {
+        if !covers.iter().any(|&q| alive[q]) {
+            return None;
+        }
+    }
+
+    Some((alive, total_eliminated))
+}
+
 // ── SAT solver ────────────────────────────────────────────────────────────────
 
 pub fn solve(
@@ -268,7 +380,7 @@ pub fn solve(
 ) -> Option<Solution> {
     let prob = build_problem(rows, cols, shear, types)?;
     let Problem {
-        n: _,
+        n,
         global,
         color_start,
         color_len,
@@ -276,15 +388,48 @@ pub fn solve(
         conflict_pairs,
     } = prob;
 
+    // ── Arc-consistency pre-propagation ───────────────────────────────────
+    // Seed propagation with the translational symmetry breaking: cell (0,0)
+    // must be covered by color 0, so all other colors' placements covering
+    // cell (0,0) are dead from the start.  Propagating from these seeds is
+    // much more effective than cold-start propagation on large tori.
+    let mut initial_dead = vec![false; n];
+    for &var_idx in &cell_to_vars[0] {
+        let (color, _) = &global[var_idx];
+        if *color != 0 {
+            initial_dead[var_idx] = true;
+        }
+    }
+
+    let (alive, _n_elim) = arc_consistency(
+        n,
+        &global,
+        &cell_to_vars,
+        &conflict_pairs,
+        cols,
+        &initial_dead,
+    )?;
+
     let mut solver = Solver::new();
     let pos = |i: usize| Lit::from_index(i, true);
     let neg = |i: usize| Lit::from_index(i, false);
 
+    // Force eliminated placements to false so they don't appear in solutions.
+    for (p, &is_alive) in alive.iter().enumerate() {
+        if !is_alive {
+            solver.add_clause(&[neg(p)]);
+        }
+    }
+
     // ── Constraint 1: Exact cover ──────────────────────────────────────────
     for covers in &cell_to_vars {
-        solver.add_clause(&covers.iter().map(|&i| pos(i)).collect::<Vec<_>>());
-        for (a, &i) in covers.iter().enumerate() {
-            for &j in &covers[a + 1..] {
+        let alive_covers: Vec<usize> = covers.iter().copied().filter(|&i| alive[i]).collect();
+        if alive_covers.is_empty() {
+            return None; // cell uncoverable after propagation
+        }
+        solver.add_clause(&alive_covers.iter().map(|&i| pos(i)).collect::<Vec<_>>());
+        for (a, &i) in alive_covers.iter().enumerate() {
+            for &j in &alive_covers[a + 1..] {
                 solver.add_clause(&[neg(i), neg(j)]);
             }
         }
@@ -298,10 +443,13 @@ pub fn solve(
     // ── Constraint 3 (optional): all colors must appear ───────────────────
     if require_all_types {
         for (start, len) in color_start.iter().zip(color_len.iter()) {
-            if *len == 0 {
-                return None;
+            let type_lits: Vec<Lit> = (*start..*start + *len)
+                .filter(|&p| alive[p])
+                .map(pos)
+                .collect();
+            if type_lits.is_empty() {
+                return None; // color has no viable placements
             }
-            let type_lits: Vec<Lit> = (*start..*start + *len).map(pos).collect();
             solver.add_clause(&type_lits);
         }
     }
@@ -396,6 +544,7 @@ pub fn solve(
             let mut grid_color = vec![vec![None; cols]; rows];
             let mut grid_piece = vec![vec![None; cols]; rows];
 
+            let mut piece_plane_cells: HashMap<usize, Vec<(i32, i32)>> = HashMap::new();
             for (idx, (color, p)) in global.iter().enumerate() {
                 if model[idx].is_positive() {
                     for &(r, c) in &p.cells {
@@ -403,6 +552,7 @@ pub fn solve(
                         grid_color[r][c] = Some(*color);
                         grid_piece[r][c] = Some(idx);
                     }
+                    piece_plane_cells.insert(idx, p.plane_cells.clone());
                 }
             }
 
@@ -410,6 +560,7 @@ pub fn solve(
                 grid_type,
                 grid_color,
                 grid_piece,
+                piece_plane_cells,
             })
         }
     }
