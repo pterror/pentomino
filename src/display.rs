@@ -259,15 +259,28 @@ pub fn build_svg(
         })
         .collect();
 
-    // The 8 surrounding copy offsets in (disp_row_delta, disp_col_delta) units.
+    // Surrounding copy offsets in (disp_row_delta, disp_col_delta) units.
     // Lattice vectors: e1 = (rows, shear), e2 = (0, cols).
     // Copy (m, n) is at delta = m*e1 + n*e2.
+    //
+    // For rows=1 tori the vertical period vector (1, shear) is only 1 display
+    // row tall, so copies at m≠0 land nearly on top of the main copy and
+    // produce visual noise (smeared bands, fake islands).  For 1-row tori we
+    // only show horizontal copies (m=0, n=±1, ±2) which give clean parallel
+    // diagonal strips and correctly illustrate how the ring tessellates.
     let copy_offsets: Vec<(i32, i32)> = if tile_copies {
-        (-1..=1_i32)
-            .flat_map(|m| (-1..=1_i32).map(move |n| (m, n)))
-            .filter(|&(m, n)| m != 0 || n != 0)
-            .map(|(m, n)| (m * rows as i32, m * shear as i32 + n * cols as i32))
-            .collect()
+        if rows == 1 {
+            [-2_i32, -1, 1, 2]
+                .iter()
+                .map(|&n| (0_i32, n * cols as i32))
+                .collect()
+        } else {
+            (-1..=1_i32)
+                .flat_map(|m| (-1..=1_i32).map(move |n| (m, n)))
+                .filter(|&(m, n)| m != 0 || n != 0)
+                .map(|(m, n)| (m * rows as i32, m * shear as i32 + n * cols as i32))
+                .collect()
+        }
     } else {
         vec![]
     };
