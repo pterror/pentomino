@@ -59,4 +59,12 @@
 
 ## Display / UX
 
-- (nothing pending)
+- **Gaps in some rendered solutions** — plane display for 1-row oblique tori
+  (shear > 0) shows diagonal stripes with visual gaps between adjacent pieces.
+  The geometry is technically correct (pieces are adjacent on the torus ring)
+  but visually confusing.  Needs a smarter layout strategy for these edge cases.
+
+- **Tiled copies in SVG** — add a `--tile-copies` flag (or always-on option
+  for `run-all --svg-dir`) that renders 2×2 (or 3×3) dimmed copies of the
+  fundamental domain around the primary solution.  Would make it immediately
+  obvious how the tiling repeats / tesselates across the plane.

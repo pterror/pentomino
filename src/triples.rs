@@ -7,6 +7,19 @@
 use crate::pentomino::PieceType;
 use std::collections::HashMap;
 
+/// A single placed piece as stored in a SAT result: enough to reconstruct
+/// the full Solution for display without re-running the solver.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PlacementRecord {
+    pub piece_type: PieceType,
+    /// Index into the original `types` multiset (the "color").
+    pub color: usize,
+    /// Torus cell coordinates covered by this piece.
+    pub cells: Vec<(usize, usize)>,
+    /// Original plane coordinates (before torus wrapping), for display.
+    pub plane_cells: Vec<(i32, i32)>,
+}
+
 /// All k-multisets of the 12 piece types, in non-decreasing order.
 /// k=1 → 12, k=2 → 78, k=3 → 364, k=4 → 1365, …
 pub fn all_multisets(k: usize) -> Vec<Vec<PieceType>> {
@@ -42,6 +55,10 @@ pub enum TripleResult {
         cols: usize,
         #[serde(default)]
         shear: usize,
+        /// Stored placements for instant reconstruction (no re-solve needed).
+        /// Empty for entries written by older versions of the tool.
+        #[serde(default)]
+        placements: Vec<PlacementRecord>,
     },
     /// No solution found for all tori up to this bound (not a proof).
     Unsat { max_rows: usize, max_cols: usize },
