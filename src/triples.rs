@@ -1,8 +1,13 @@
-//! Enumerate all C(12,3) = 220 triples of pentomino types and manage results.
+//! Enumerate piece-type multisets and manage results.
+//!
+//! A "triple" is a 3-element multiset (duplicates allowed).  Each element is
+//! a distinct *color*.  The 220 distinct triples are the C(12,3) subsets; the
+//! 364 3-multisets include cases like [N,X,X] and [X,X,X].
 
 use crate::pentomino::PieceType;
 use std::collections::HashMap;
 
+/// All C(12,3) = 220 distinct triples (no repeated types).
 pub fn all_triples() -> Vec<[PieceType; 3]> {
     let all = PieceType::all();
     let n = all.len();
@@ -17,11 +22,27 @@ pub fn all_triples() -> Vec<[PieceType; 3]> {
     triples
 }
 
+/// All 3-multisets of the 12 piece types (364 total, including repeats).
+/// Sorted in non-decreasing order within each multiset.
+pub fn all_multisets() -> Vec<Vec<PieceType>> {
+    let all = PieceType::all();
+    let n = all.len();
+    let mut result = Vec::new();
+    for i in 0..n {
+        for j in i..n {
+            for k in j..n {
+                result.push(vec![all[i], all[j], all[k]]);
+            }
+        }
+    }
+    result
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum TripleResult {
-    /// Solution found on a torus of this size, with tiling description.
+    /// Solution found on a torus of this size.
     Sat { rows: usize, cols: usize },
-    /// No solution found for all tori up to this bound (not a proof of impossibility).
+    /// No solution found for all tori up to this bound (not a proof).
     Unsat { max_rows: usize, max_cols: usize },
     /// Still being searched.
     Unknown,
@@ -51,15 +72,20 @@ impl ResultsDb {
         std::fs::write(path, json).unwrap();
     }
 
-    pub fn key(triple: &[PieceType; 3]) -> String {
-        format!("{:?}-{:?}-{:?}", triple[0], triple[1], triple[2])
+    /// Key for an arbitrary multiset slice.
+    pub fn multiset_key(types: &[PieceType]) -> String {
+        types
+            .iter()
+            .map(|t| format!("{:?}", t))
+            .collect::<Vec<_>>()
+            .join("-")
     }
 
-    pub fn get(&self, triple: &[PieceType; 3]) -> Option<&TripleResult> {
-        self.results.get(&Self::key(triple))
+    pub fn get_multiset(&self, types: &[PieceType]) -> Option<&TripleResult> {
+        self.results.get(&Self::multiset_key(types))
     }
 
-    pub fn set(&mut self, triple: &[PieceType; 3], result: TripleResult) {
-        self.results.insert(Self::key(triple), result);
+    pub fn set_multiset(&mut self, types: &[PieceType], result: TripleResult) {
+        self.results.insert(Self::multiset_key(types), result);
     }
 }

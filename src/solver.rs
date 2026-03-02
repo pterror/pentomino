@@ -2,17 +2,24 @@
 //!
 //! # Encoding
 //!
-//! Variables: one boolean x_i per placement i.
-//!   x_i = true  ↔  placement i is included in the tiling
+//! `types` is a **multiset** of piece types (duplicates allowed).  Each index
+//! in `types` is a distinct *color* with the given shape.  The constraint is:
+//! no two pieces of the **same color** may be orthogonally adjacent.  Two
+//! colors that share a shape (e.g. the two X entries in [N, X, X]) are
+//! independent colors and *may* touch.
+//!
+//! Variables: for each color c (index into `types`) and each placement p of
+//! that color's shape, a boolean x_{c,p}.
+//!   x_{c,p} = true  ↔  placement p of color c is used in the tiling
 //!
 //! ## Constraint 1 — Exact cover
-//! Every cell is covered by exactly one placement:
-//!   ∀ cell c:  (∨ x_i for i covering c)           [at-least-one]
-//!              ∧ ¬x_i ∨ ¬x_j  for all i≠j covering c  [at-most-one, pairwise]
+//! Every cell is covered by exactly one (color, placement) pair:
+//!   ∀ cell k:  (∨ x_{c,p} for all (c,p) covering k)           [at-least-one]
+//!              ∧ ¬x_{c,p} ∨ ¬x_{c',p'} for all (c,p)≠(c',p') [at-most-one]
 //!
-//! ## Constraint 2 — No same-type orthogonal adjacency
-//! Two distinct placements of the same type may not be orthogonally adjacent:
-//!   ∀ i, j same-type, non-overlapping, adjacent:  ¬x_i ∨ ¬x_j
+//! ## Constraint 2 — No same-color adjacency
+//! Two placements of the *same color* may not be orthogonally adjacent:
+//!   ∀ (c,p), (c,q) same-color, non-overlapping, adjacent:  ¬x_{c,p} ∨ ¬x_{c,q}
 //!
 //! # Proof output
 //!
@@ -24,55 +31,88 @@
 
 use crate::pentomino::{all_pieces, PieceType};
 use crate::placement::enumerate_placements;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use varisat::{ExtendFormula, Lit, Solver};
 
 pub struct Solution {
-    /// Which piece type covers each cell.
+    /// Which piece type (shape) covers each cell.
     pub grid_type: Vec<Vec<Option<PieceType>>>,
-    /// Which placement index covers each cell (for coloring in display).
+    /// Which color index covers each cell (index into the original `types` slice).
+    pub grid_color: Vec<Vec<Option<usize>>>,
+    /// Which global placement variable covers each cell (for coloring in display).
     pub grid_piece: Vec<Vec<Option<usize>>>,
 }
 
-/// Try to find a valid tiling of the rows×cols torus with the given triple of
-/// piece types, subject to the no-same-type-adjacency constraint.
+/// Try to find a valid tiling of the rows×cols torus with the given multiset
+/// of piece types, subject to the no-same-color-adjacency constraint.
 ///
-/// If `require_all_types` is true, all three types in the triple must appear at
-/// least once in the solution (otherwise a solution using only 2 of the 3 types
-/// would be accepted — which answers a different question).
+/// `types` is a **multiset** (duplicates allowed).  Each index in `types` is
+/// a distinct color.  Two colors with the same shape may be adjacent; two
+/// placements of the *same* color may not.
+///
+/// If `require_all_types` is true, every color in `types` must appear at
+/// least once.  Without this, a sub-set solution would be accepted.
 ///
 /// Returns `Some(Solution)` if satisfiable, `None` otherwise.
 pub fn solve(
     rows: usize,
     cols: usize,
-    triple: [PieceType; 3],
+    types: &[PieceType],
     require_all_types: bool,
 ) -> Option<Solution> {
     let all = all_pieces();
 
-    // Filter to the three piece types in the triple.
+    // Enumerate placements for each unique shape that appears in `types`.
+    let unique_shapes: HashSet<PieceType> = types.iter().cloned().collect();
     let pieces: Vec<_> = all
         .into_iter()
-        .filter(|(t, _)| triple.contains(t))
+        .filter(|(t, _)| unique_shapes.contains(t))
         .collect();
 
-    let placements = enumerate_placements(rows, cols, &pieces);
-    let n = placements.len();
+    // shape_placements[shape] = list of distinct placements for that shape.
+    let raw = enumerate_placements(rows, cols, &pieces);
+    let mut shape_placements: HashMap<PieceType, Vec<_>> = HashMap::new();
+    for p in raw {
+        shape_placements.entry(p.piece_type).or_default().push(p);
+    }
 
+    // Build global variable table.
+    // global[idx] = (color_index, placement)
+    // For each color (index into `types`), we replicate the shape's placements.
+    // Colors with the same shape get independent copies of the variables.
+    let mut global: Vec<(usize, crate::placement::Placement)> = Vec::new();
+    // color_start[c] = first global index for color c (for require_all_types).
+    let mut color_start: Vec<usize> = Vec::new();
+    let mut color_len: Vec<usize> = Vec::new();
+
+    for (color, &pt) in types.iter().enumerate() {
+        let start = global.len();
+        color_start.push(start);
+        if let Some(plist) = shape_placements.get(&pt) {
+            for p in plist {
+                global.push((color, p.clone()));
+            }
+            color_len.push(plist.len());
+        } else {
+            color_len.push(0);
+        }
+    }
+
+    let n = global.len();
     if n == 0 {
         return None;
     }
 
-    // cell_index → list of placement indices covering that cell
-    let mut cell_to_placements: Vec<Vec<usize>> = vec![vec![]; rows * cols];
-    for (idx, p) in placements.iter().enumerate() {
+    // cell → list of global variable indices covering that cell.
+    let mut cell_to_vars: Vec<Vec<usize>> = vec![vec![]; rows * cols];
+    for (idx, (_, p)) in global.iter().enumerate() {
         for &(r, c) in &p.cells {
-            cell_to_placements[r * cols + c].push(idx);
+            cell_to_vars[r * cols + c].push(idx);
         }
     }
 
-    // Check every cell is coverable.
-    if cell_to_placements.iter().any(|v| v.is_empty()) {
+    // Every cell must be coverable.
+    if cell_to_vars.iter().any(|v| v.is_empty()) {
         return None;
     }
 
@@ -81,10 +121,10 @@ pub fn solve(
     let neg = |i: usize| Lit::from_index(i, false);
 
     // ── Constraint 1: Exact cover ──────────────────────────────────────────
-    for covers in &cell_to_placements {
-        // At least one placement covers this cell.
+    for covers in &cell_to_vars {
+        // At least one variable covers this cell.
         solver.add_clause(&covers.iter().map(|&i| pos(i)).collect::<Vec<_>>());
-        // At most one (pairwise encoding; adequate for typical fan-out sizes).
+        // At most one (pairwise encoding).
         for (a, &i) in covers.iter().enumerate() {
             for &j in &covers[a + 1..] {
                 solver.add_clause(&[neg(i), neg(j)]);
@@ -92,7 +132,7 @@ pub fn solve(
         }
     }
 
-    // ── Constraint 2: No same-type adjacency ──────────────────────────────
+    // ── Constraint 2: No same-color adjacency ─────────────────────────────
     let nbrs = |r: usize, c: usize| -> [(usize, usize); 4] {
         [
             ((r + rows - 1) % rows, c),
@@ -102,16 +142,12 @@ pub fn solve(
         ]
     };
 
-    // For each placement i, find all same-type placements j > i that are
-    // adjacent to i (share an orthogonal edge between their respective cells).
-    // We track pairs to avoid duplicate clauses.
     let mut conflict_pairs: HashSet<(usize, usize)> = HashSet::new();
 
     for i in 0..n {
-        let p1 = &placements[i];
+        let (color_i, p1) = &global[i];
         let p1_cells: HashSet<(usize, usize)> = p1.cells.iter().cloned().collect();
 
-        // Collect cells orthogonally adjacent to p1 but not in p1.
         let adjacent_cells: HashSet<(usize, usize)> = p1
             .cells
             .iter()
@@ -119,10 +155,10 @@ pub fn solve(
             .filter(|nc| !p1_cells.contains(nc))
             .collect();
 
-        // Find same-type placements covering those adjacent cells.
         for (ar, ac) in &adjacent_cells {
-            for &j in &cell_to_placements[ar * cols + ac] {
-                if j > i && placements[j].piece_type == p1.piece_type {
+            for &j in &cell_to_vars[ar * cols + ac] {
+                let (color_j, _) = &global[j];
+                if j > i && color_j == color_i {
                     conflict_pairs.insert((i, j));
                 }
             }
@@ -133,19 +169,13 @@ pub fn solve(
         solver.add_clause(&[neg(i), neg(j)]);
     }
 
-    // ── Constraint 3 (optional): all types must appear ────────────────────
-    // For each type t in the triple, at least one placement of type t must be
-    // active. Without this a 2-type sub-solution is accepted, which answers a
-    // different question.
+    // ── Constraint 3 (optional): all colors must appear ───────────────────
     if require_all_types {
-        for &t in &triple {
-            let type_lits: Vec<Lit> = (0..n)
-                .filter(|&i| placements[i].piece_type == t)
-                .map(pos)
-                .collect();
-            if type_lits.is_empty() {
-                return None; // impossible to satisfy
+        for (start, len) in color_start.iter().zip(color_len.iter()) {
+            if *len == 0 {
+                return None;
             }
+            let type_lits: Vec<Lit> = (*start..*start + *len).map(pos).collect();
             solver.add_clause(&type_lits);
         }
     }
@@ -155,14 +185,15 @@ pub fn solve(
         false => None,
         true => {
             let model = solver.model().unwrap();
-            // model[i].is_positive() == true  ↔  placement i is active
             let mut grid_type = vec![vec![None; cols]; rows];
+            let mut grid_color = vec![vec![None; cols]; rows];
             let mut grid_piece = vec![vec![None; cols]; rows];
 
-            for (idx, p) in placements.iter().enumerate() {
+            for (idx, (color, p)) in global.iter().enumerate() {
                 if model[idx].is_positive() {
                     for &(r, c) in &p.cells {
                         grid_type[r][c] = Some(p.piece_type);
+                        grid_color[r][c] = Some(*color);
                         grid_piece[r][c] = Some(idx);
                     }
                 }
@@ -170,13 +201,14 @@ pub fn solve(
 
             Some(Solution {
                 grid_type,
+                grid_color,
                 grid_piece,
             })
         }
     }
 }
 
-/// Verify a solution: exact cover + no same-type adjacency. Panics on error.
+/// Verify a solution: exact cover + no same-color adjacency. Panics on error.
 pub fn verify(solution: &Solution, rows: usize, cols: usize) {
     // Every cell covered exactly once
     for r in 0..rows {
@@ -188,14 +220,14 @@ pub fn verify(solution: &Solution, rows: usize, cols: usize) {
                 c
             );
             assert!(
-                solution.grid_piece[r][c].is_some(),
-                "cell ({},{}) missing piece id",
+                solution.grid_color[r][c].is_some(),
+                "cell ({},{}) missing color",
                 r,
                 c
             );
         }
     }
-    // No same-type orthogonal adjacency
+    // No same-color orthogonal adjacency
     let nbrs = |r: usize, c: usize| -> [(usize, usize); 4] {
         [
             ((r + rows - 1) % rows, c),
@@ -206,20 +238,20 @@ pub fn verify(solution: &Solution, rows: usize, cols: usize) {
     };
     for r in 0..rows {
         for c in 0..cols {
-            let t = solution.grid_type[r][c].unwrap();
+            let color = solution.grid_color[r][c].unwrap();
             let id = solution.grid_piece[r][c].unwrap();
             for (nr, nc) in nbrs(r, c) {
-                let nt = solution.grid_type[nr][nc].unwrap();
+                let ncolor = solution.grid_color[nr][nc].unwrap();
                 let nid = solution.grid_piece[nr][nc].unwrap();
                 if id != nid {
                     assert!(
-                        t != nt,
-                        "same-type adjacency violation at ({},{})↔({},{}): {:?}",
+                        color != ncolor,
+                        "same-color adjacency violation at ({},{})↔({},{}) color={}",
                         r,
                         c,
                         nr,
                         nc,
-                        t
+                        color
                     );
                 }
             }

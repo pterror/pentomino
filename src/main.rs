@@ -7,13 +7,15 @@ mod triples;
 use clap::{Parser, Subcommand};
 use pentomino::PieceType;
 use std::io::Write;
-use triples::{all_triples, ResultsDb, TripleResult};
+use triples::{all_multisets, all_triples, ResultsDb, TripleResult};
 
 #[derive(Parser)]
 #[command(
     name = "pentomino",
-    about = "Search for periodic plane tilings with pentomino triples\n\
-             subject to: no two pieces of the same type touch orthogonally.\n\
+    about = "Search for periodic plane tilings with pentomino multisets\n\
+             subject to: no two pieces of the same color touch orthogonally.\n\
+             Duplicates in the type list are distinct colors (e.g. 'N X X'\n\
+             gives three colors where the two X-colors may touch each other).\n\
              All results are on rectangular tori (oblique tori: TODO)."
 )]
 struct Cli {
@@ -23,16 +25,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Search a single triple across increasing torus sizes.
+    /// Search a multiset of piece types across increasing torus sizes.
     ///
-    /// Example: pentomino solve N V Y --min 7 --max 20
+    /// Duplicates in the type list are distinct colors — they may touch each
+    /// other but not themselves.  Examples:
+    ///   pentomino solve N V Y          # three distinct colors
+    ///   pentomino solve N X X          # N + two independent X-colors
+    ///   pentomino solve X X X          # three independent X-colors
     Solve {
-        /// First piece type (F I L N P T U V W X Y Z)
-        a: String,
-        /// Second piece type
-        b: String,
-        /// Third piece type
-        c: String,
+        /// Piece types (F I L N P T U V W X Y Z); duplicates are distinct colors.
+        #[arg(num_args = 1..=12)]
+        types: Vec<String>,
         /// Minimum torus dimension to start from (rows and cols both ≥ this)
         #[arg(long, default_value_t = 1)]
         min: usize,
@@ -48,30 +51,37 @@ enum Command {
         /// Disable ANSI color output
         #[arg(long)]
         no_color: bool,
-        /// Require all three types in the triple to appear at least once.
-        /// Without this, a 2-type sub-solution is accepted (answers a different question).
+        /// Require all colors to appear at least once.
+        /// Without this, a sub-set solution is accepted.
         #[arg(long, default_value_t = true)]
         require_all_types: bool,
     },
-    /// Run all 220 triples, saving results to a JSON database.
+    /// Run all triples (220) or all 3-multisets (364), saving results to JSON.
     RunAll {
-        /// Maximum torus dimension to try per triple
+        /// Maximum torus dimension to try per multiset
         #[arg(long, default_value_t = 15)]
         max: usize,
         /// Path to results database (created/updated)
         #[arg(long, default_value = "results/results.json")]
         db: String,
-        /// Skip triples already recorded in the database
+        /// Skip multisets already recorded in the database
         #[arg(long, default_value_t = true)]
         skip_done: bool,
+        /// Include multisets with repeated types (e.g. N-X-X, X-X-X).
+        /// Without this, only the 220 distinct triples are run.
+        #[arg(long, default_value_t = false)]
+        include_multisets: bool,
     },
     /// Print a summary of the results database.
     Summary {
         #[arg(long, default_value = "results/results.json")]
         db: String,
     },
-    /// List all 220 triples (useful for piping to other tools).
-    ListTriples,
+    /// List all triples (or all 3-multisets with --include-multisets).
+    ListTriples {
+        #[arg(long, default_value_t = false)]
+        include_multisets: bool,
+    },
 }
 
 fn parse_piece(s: &str) -> PieceType {
@@ -127,14 +137,14 @@ struct RunOpts<'a> {
     require_all_types: bool,
 }
 
-fn run_triple(triple: [PieceType; 3], opts: &RunOpts) -> TripleResult {
+fn run_multiset(types: &[PieceType], opts: &RunOpts) -> TripleResult {
     for (rows, cols) in torus_sizes(opts.min, opts.max) {
         if opts.verbose {
             print!("  {}×{} ({} pieces)... ", rows, cols, rows * cols / 5);
             std::io::stdout().flush().ok();
         }
 
-        match solver::solve(rows, cols, triple, opts.require_all_types) {
+        match solver::solve(rows, cols, types, opts.require_all_types) {
             Some(solution) => {
                 if opts.verbose {
                     println!("SAT");
@@ -168,14 +178,20 @@ fn run_triple(triple: [PieceType; 3], opts: &RunOpts) -> TripleResult {
     }
 }
 
+fn multiset_label(types: &[PieceType]) -> String {
+    types
+        .iter()
+        .map(|t| format!("{}", t))
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 fn main() {
     let cli = Cli::parse();
 
     match cli.command {
         Command::Solve {
-            a,
-            b,
-            c,
+            types,
             min,
             max,
             verify,
@@ -183,19 +199,18 @@ fn main() {
             no_color,
             require_all_types,
         } => {
-            let mut triple = [parse_piece(&a), parse_piece(&b), parse_piece(&c)];
-            triple.sort();
+            let types: Vec<PieceType> = types.iter().map(|s| parse_piece(s)).collect();
 
             println!(
-                "Searching for {}-{}-{} tiling (no same-type adjacency)",
-                triple[0], triple[1], triple[2]
+                "Searching for {} tiling (no same-color adjacency)",
+                multiset_label(&types)
             );
             println!(
                 "Rectangular tori, rows×cols divisible by 5, min={} max={}",
                 min, max
             );
             if require_all_types {
-                println!("(all three types must appear)");
+                println!("(all {} colors must appear)", types.len());
             }
             println!();
 
@@ -208,7 +223,7 @@ fn main() {
                 svg: svg.as_deref(),
                 require_all_types,
             };
-            let result = run_triple(triple, &opts);
+            let result = run_multiset(&types, &opts);
 
             println!();
             match result {
@@ -226,42 +241,67 @@ fn main() {
             }
         }
 
-        Command::RunAll { max, db, skip_done } => {
+        Command::RunAll {
+            max,
+            db,
+            skip_done,
+            include_multisets,
+        } => {
             let mut results_db = ResultsDb::load(&db);
-            let triples = all_triples();
-            let total = triples.len();
 
-            println!("Running all {} triples (max torus dim={})", total, max);
+            // Build the list of multisets to run.
+            let multisets: Vec<Vec<PieceType>> = if include_multisets {
+                all_multisets()
+            } else {
+                all_triples().into_iter().map(|t| t.to_vec()).collect()
+            };
+            let total = multisets.len();
+
+            println!(
+                "Running {} {} (max torus dim={})",
+                total,
+                if include_multisets {
+                    "3-multisets"
+                } else {
+                    "triples"
+                },
+                max
+            );
             if skip_done {
-                let done = triples
+                let done = multisets
                     .iter()
-                    .filter(|t| !matches!(results_db.get(t), None | Some(TripleResult::Unknown)))
+                    .filter(|t| {
+                        !matches!(
+                            results_db.get_multiset(t),
+                            None | Some(TripleResult::Unknown)
+                        )
+                    })
                     .count();
-                println!("Skipping {} already-completed triples", done);
+                println!("Skipping {} already-completed", done);
             }
             println!();
 
-            for (i, triple) in triples.iter().enumerate() {
+            std::fs::create_dir_all(
+                std::path::Path::new(&db)
+                    .parent()
+                    .unwrap_or(std::path::Path::new(".")),
+            )
+            .ok();
+
+            for (i, types) in multisets.iter().enumerate() {
                 if skip_done {
-                    if let Some(r) = results_db.get(triple) {
+                    if let Some(r) = results_db.get_multiset(types) {
                         if !matches!(r, TripleResult::Unknown) {
                             continue;
                         }
                     }
                 }
 
-                print!(
-                    "[{}/{}] {}-{}-{}: ",
-                    i + 1,
-                    total,
-                    triple[0],
-                    triple[1],
-                    triple[2]
-                );
+                print!("[{}/{}] {}: ", i + 1, total, multiset_label(types));
                 std::io::stdout().flush().ok();
 
-                let result = run_triple(
-                    *triple,
+                let result = run_multiset(
+                    types,
                     &RunOpts {
                         min: 1,
                         max,
@@ -283,59 +323,65 @@ fn main() {
                     _ => unreachable!(),
                 }
 
-                results_db.set(triple, result);
+                results_db.set_multiset(types, result);
                 results_db.save(&db);
             }
 
             println!();
-            print_summary(&results_db, &triples);
+            print_summary(&results_db, &multisets);
         }
 
         Command::Summary { db } => {
             let results_db = ResultsDb::load(&db);
-            let triples = all_triples();
-            print_summary(&results_db, &triples);
+            let multisets: Vec<Vec<PieceType>> =
+                all_triples().into_iter().map(|t| t.to_vec()).collect();
+            print_summary(&results_db, &multisets);
         }
 
-        Command::ListTriples => {
-            for triple in all_triples() {
-                println!("{} {} {}", triple[0], triple[1], triple[2]);
+        Command::ListTriples { include_multisets } => {
+            let multisets: Vec<Vec<PieceType>> = if include_multisets {
+                all_multisets()
+            } else {
+                all_triples().into_iter().map(|t| t.to_vec()).collect()
+            };
+            for types in &multisets {
+                println!("{}", multiset_label(types));
             }
         }
     }
 }
 
-fn print_summary(db: &ResultsDb, triples: &[[PieceType; 3]]) {
-    let total = triples.len();
-    let sat: Vec<_> = triples
+fn print_summary(db: &ResultsDb, multisets: &[Vec<PieceType>]) {
+    let total = multisets.len();
+    let sat: Vec<_> = multisets
         .iter()
-        .filter(|t| matches!(db.get(t), Some(TripleResult::Sat { .. })))
+        .filter(|t| matches!(db.get_multiset(t), Some(TripleResult::Sat { .. })))
         .collect();
-    let unsat: Vec<_> = triples
+    let unsat: Vec<_> = multisets
         .iter()
-        .filter(|t| matches!(db.get(t), Some(TripleResult::Unsat { .. })))
+        .filter(|t| matches!(db.get_multiset(t), Some(TripleResult::Unsat { .. })))
         .collect();
     let unknown = total - sat.len() - unsat.len();
 
     println!("=== Results Summary ===");
-    println!("Total triples: {}", total);
-    println!("  SAT (tileable):     {}", sat.len());
+    println!("Total: {}", total);
+    println!("  SAT (tileable):            {}", sat.len());
     println!("  Unsat (no solution found): {}", unsat.len());
-    println!("  Unknown / not run:  {}", unknown);
+    println!("  Unknown / not run:         {}", unknown);
 
     if !sat.is_empty() {
-        println!("\nSAT triples:");
+        println!("\nSAT:");
         for t in &sat {
-            if let Some(TripleResult::Sat { rows, cols }) = db.get(t) {
-                println!("  {}-{}-{}: {}×{}", t[0], t[1], t[2], rows, cols);
+            if let Some(TripleResult::Sat { rows, cols }) = db.get_multiset(t) {
+                println!("  {}: {}×{}", multiset_label(t), rows, cols);
             }
         }
     }
 
     if !unsat.is_empty() {
-        println!("\nUnsat triples (no solution found within bound):");
+        println!("\nUnsat (no solution found within bound):");
         for t in &unsat {
-            println!("  {}-{}-{}", t[0], t[1], t[2]);
+            println!("  {}", multiset_label(t));
         }
     }
 }
