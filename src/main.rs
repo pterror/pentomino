@@ -7,7 +7,7 @@ mod triples;
 use clap::{Parser, Subcommand};
 use pentomino::PieceType;
 use std::io::Write;
-use triples::{all_multisets, all_triples, ResultsDb, TripleResult};
+use triples::{all_multisets, ResultsDb, TripleResult};
 
 #[derive(Parser)]
 #[command(
@@ -56,7 +56,10 @@ enum Command {
         #[arg(long, default_value_t = true)]
         require_all_types: bool,
     },
-    /// Run all triples (220) or all 3-multisets (364), saving results to JSON.
+    /// Run all k-multisets of piece types, saving results to a JSON database.
+    ///
+    /// Counts by size: 1→12, 2→78, 3→364, 4→1365, …
+    /// Default size=3 covers the classic "all triples" search.
     RunAll {
         /// Maximum torus dimension to try per multiset
         #[arg(long, default_value_t = 15)]
@@ -67,20 +70,23 @@ enum Command {
         /// Skip multisets already recorded in the database
         #[arg(long, default_value_t = true)]
         skip_done: bool,
-        /// Include multisets with repeated types (e.g. N-X-X, X-X-X).
-        /// Without this, only the 220 distinct triples are run.
-        #[arg(long, default_value_t = false)]
-        include_multisets: bool,
+        /// Number of colors in each multiset (1=singles, 2=pairs, 3=triples, …)
+        #[arg(long, default_value_t = 3)]
+        size: usize,
     },
     /// Print a summary of the results database.
     Summary {
         #[arg(long, default_value = "results/results.json")]
         db: String,
+        /// Multiset size to summarise (default 3)
+        #[arg(long, default_value_t = 3)]
+        size: usize,
     },
-    /// List all triples (or all 3-multisets with --include-multisets).
+    /// List all k-multisets.
     ListTriples {
-        #[arg(long, default_value_t = false)]
-        include_multisets: bool,
+        /// Multiset size (default 3)
+        #[arg(long, default_value_t = 3)]
+        size: usize,
     },
 }
 
@@ -245,27 +251,16 @@ fn main() {
             max,
             db,
             skip_done,
-            include_multisets,
+            size,
         } => {
             let mut results_db = ResultsDb::load(&db);
 
-            // Build the list of multisets to run.
-            let multisets: Vec<Vec<PieceType>> = if include_multisets {
-                all_multisets()
-            } else {
-                all_triples().into_iter().map(|t| t.to_vec()).collect()
-            };
+            let multisets = all_multisets(size);
             let total = multisets.len();
 
             println!(
-                "Running {} {} (max torus dim={})",
-                total,
-                if include_multisets {
-                    "3-multisets"
-                } else {
-                    "triples"
-                },
-                max
+                "Running {} {}-multisets (max torus dim={})",
+                total, size, max
             );
             if skip_done {
                 let done = multisets
@@ -331,21 +326,14 @@ fn main() {
             print_summary(&results_db, &multisets);
         }
 
-        Command::Summary { db } => {
+        Command::Summary { db, size } => {
             let results_db = ResultsDb::load(&db);
-            let multisets: Vec<Vec<PieceType>> =
-                all_triples().into_iter().map(|t| t.to_vec()).collect();
-            print_summary(&results_db, &multisets);
+            print_summary(&results_db, &all_multisets(size));
         }
 
-        Command::ListTriples { include_multisets } => {
-            let multisets: Vec<Vec<PieceType>> = if include_multisets {
-                all_multisets()
-            } else {
-                all_triples().into_iter().map(|t| t.to_vec()).collect()
-            };
-            for types in &multisets {
-                println!("{}", multiset_label(types));
+        Command::ListTriples { size } => {
+            for types in all_multisets(size) {
+                println!("{}", multiset_label(&types));
             }
         }
     }

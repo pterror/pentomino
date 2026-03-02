@@ -1,0 +1,340 @@
+{
+  "results": {
+    "F-N-X": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-L-U": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-N-T": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-L-P": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-P-T": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-I-V": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-L-V": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-N-P": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-P-X": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-T-Y": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-W-Z": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-X-Y": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-N-Z": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-V-Y": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-T-W": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-I-N": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-L-Z": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-I-P": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-V-Z": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-Y-Z": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "I-L-N": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-P-V": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-L-W": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-N-U": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-N-V": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-P-W": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-W-Y": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-N-W": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-I-U": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-I-W": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-N-Y": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-U-V": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-T-U": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-L-Y": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-I-X": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-U-X": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-U-Z": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-I-Z": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-V-X": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-L-T": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-U-W": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-P-U": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-P-Y": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-T-V": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-T-X": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-U-Y": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-L-N": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-I-T": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-X-Z": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-P-Z": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-T-Z": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-L-X": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-V-W": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-I-Y": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-I-L": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    },
+    "F-W-X": {
+      "Unsat": {
+        "max_rows": 15,
+        "max_cols": 15
+      }
+    }
+  }
+}

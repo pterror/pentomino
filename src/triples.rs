@@ -1,41 +1,37 @@
 //! Enumerate piece-type multisets and manage results.
 //!
-//! A "triple" is a 3-element multiset (duplicates allowed).  Each element is
-//! a distinct *color*.  The 220 distinct triples are the C(12,3) subsets; the
-//! 364 3-multisets include cases like [N,X,X] and [X,X,X].
+//! Each element of a multiset is a distinct *color* with the given shape.
+//! `all_multisets(k)` enumerates all k-element multisets of the 12 piece types
+//! in non-decreasing order (with repetition).  Count = C(12+k-1, k).
 
 use crate::pentomino::PieceType;
 use std::collections::HashMap;
 
-/// All C(12,3) = 220 distinct triples (no repeated types).
-pub fn all_triples() -> Vec<[PieceType; 3]> {
+/// All k-multisets of the 12 piece types, in non-decreasing order.
+/// k=1 → 12, k=2 → 78, k=3 → 364, k=4 → 1365, …
+pub fn all_multisets(k: usize) -> Vec<Vec<PieceType>> {
     let all = PieceType::all();
-    let n = all.len();
-    let mut triples = Vec::new();
-    for i in 0..n {
-        for j in i + 1..n {
-            for k in j + 1..n {
-                triples.push([all[i], all[j], all[k]]);
-            }
-        }
-    }
-    triples
+    let mut result = Vec::new();
+    multisets_rec(all, 0, k, &mut vec![], &mut result);
+    result
 }
 
-/// All 3-multisets of the 12 piece types (364 total, including repeats).
-/// Sorted in non-decreasing order within each multiset.
-pub fn all_multisets() -> Vec<Vec<PieceType>> {
-    let all = PieceType::all();
-    let n = all.len();
-    let mut result = Vec::new();
-    for i in 0..n {
-        for j in i..n {
-            for k in j..n {
-                result.push(vec![all[i], all[j], all[k]]);
-            }
-        }
+fn multisets_rec(
+    all: &[PieceType],
+    start: usize,
+    remaining: usize,
+    current: &mut Vec<PieceType>,
+    result: &mut Vec<Vec<PieceType>>,
+) {
+    if remaining == 0 {
+        result.push(current.clone());
+        return;
     }
-    result
+    for i in start..all.len() {
+        current.push(all[i]);
+        multisets_rec(all, i, remaining - 1, current, result);
+        current.pop();
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
