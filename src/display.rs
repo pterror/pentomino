@@ -1,16 +1,21 @@
 //! Terminal and SVG display of tiling solutions.
 //!
+//! # Strategy
+//!
+//! Each piece is BFS-unfolded from the torus into the plane: starting from an
+//! anchor cell, neighbours are stepped to in the plane direction that matches
+//! the torus step (+1 row, -1 col, etc.) regardless of whether the step
+//! crosses a torus boundary.  This always produces a connected pentomino shape
+//! with bounding box ≤ 4×4.  Exactly one copy of each piece is rendered; the
+//! display bounds are the bounding box of all unfolded cells.
+//!
 //! # Terminal (ANSI 256-color)
-//!   `print_colored` — background color per piece type, thick `|`/`─` borders
-//!   between piece boundaries.  Shows 2 × 2 copies of the fundamental domain
-//!   so the periodicity (and shear, if any) is visible.
+//!   `print_colored` — compact: one colored space per cell, one line per row.
 //!
 //! # SVG
-//!   `write_svg` — one 40×40 cell per grid cell, colored by piece type, thick
-//!   stroke on piece boundaries, thin stroke on same-piece edges.
-//!   Suitable for inclusion in proofs/papers.
+//!   `write_svg` — 40×40 px per cell, piece boundaries as thick strokes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::pentomino::PieceType;
 use crate::solver::Solution;
@@ -21,20 +26,20 @@ use crate::solver::Solution;
 // by piece type.  This ensures that e.g. [I, I, I] shows three distinct colors
 // rather than three identical cyan cells.
 
-/// ANSI 256-color background palette, one entry per color index (wraps at 12).
+/// ANSI 256-color background palette (muted), one entry per color index (wraps at 12).
 const ANSI_PALETTE: &[u8] = &[
-    213, // 0  pink/magenta
-    51,  // 1  bright cyan
-    214, // 2  orange
-    196, // 3  bright red
-    46,  // 4  bright green
-    21,  // 5  bright blue
-    248, // 6  light grey
-    39,  // 7  steel blue
-    220, // 8  bright yellow
-    141, // 9  medium purple
-    118, // 10 lime green
-    202, // 11 red-orange
+    133, // 0  muted pink/mauve
+    30,  // 1  teal
+    136, // 2  dark orange/amber
+    124, // 3  dark red
+    28,  // 4  dark green
+    18,  // 5  dark blue
+    242, // 6  medium grey
+    25,  // 7  dark steel blue
+    100, // 8  olive/dark yellow
+    97,  // 9  muted purple
+    34,  // 10 medium green
+    130, // 11 brown/rust
 ];
 
 fn ansi_bg(color: usize) -> u8 {
@@ -61,81 +66,146 @@ fn svg_fill(color: usize) -> &'static str {
     SVG_PALETTE[color % SVG_PALETTE.len()]
 }
 
-/// Choose white or black text for readability over an ANSI 256-color background.
-/// Rough luminance heuristic based on the color cube indices.
-fn ansi_fg_white(bg: u8) -> bool {
-    // Colors 232–255 are greyscale; 0–7 are dark; most of 16–231 are readable
-    // with white text. Dark ones (low values in cube) need black.
-    match bg {
-        0..=7 | 232..=244 => false, // dark bg → black text? no: use white
-        _ => true,
+// ── Piece unfolding ───────────────────────────────────────────────────────────
+//
+// A piece's 5 torus cells form a connected pentomino on the torus.  When
+// stored as torus coordinates some cells may "wrap" — e.g. for a horizontal
+// I-piece at anchor column 8 on a 10-wide torus the cells are (r,8),(r,9),
+// (r,0),(r,1),(r,2) which look disconnected in a flat grid.
+//
+// BFS-unfolding assigns each cell a plane position by stepping in the natural
+// plane direction (right=+1 col, down=+1 row, …) from an already-placed
+// neighbour, without caring about torus wrapping.  The result is always the
+// original connected pentomino shape.
+
+/// BFS-unfold a set of torus cells belonging to one piece.
+/// Returns plane (row, col) for each cell, in the same order as `cells`.
+/// The anchor (lexicographic min of the torus cells) is placed at its own
+/// torus coordinates; all other cells are offset relative to their BFS parent.
+fn unfold_piece(
+    cells: &[(usize, usize)],
+    rows: usize,
+    cols: usize,
+    shear: usize,
+) -> Vec<(i32, i32)> {
+    let cell_set: HashSet<(usize, usize)> = cells.iter().cloned().collect();
+    let mut plane_of: HashMap<(usize, usize), (i32, i32)> = HashMap::new();
+    let mut queue: VecDeque<(usize, usize)> = VecDeque::new();
+
+    let &anchor = cells.iter().min().unwrap();
+    plane_of.insert(anchor, (anchor.0 as i32, anchor.1 as i32));
+    queue.push_back(anchor);
+
+    let shear = shear % cols.max(1);
+
+    while let Some((tr, tc)) = queue.pop_front() {
+        let (pr, pc) = plane_of[&(tr, tc)];
+
+        // For each torus neighbour that belongs to this piece, assign a plane
+        // position by stepping in the natural plane direction.
+        let neighbors: [(usize, usize, i32, i32); 4] = [
+            // right
+            (tr, (tc + 1) % cols, 0, 1),
+            // left
+            (tr, (tc + cols - 1) % cols, 0, -1),
+            // down (crossing bottom wraps col by +shear)
+            (
+                (tr + 1) % rows,
+                if tr + 1 < rows {
+                    tc
+                } else {
+                    (tc + shear) % cols
+                },
+                1,
+                0,
+            ),
+            // up (crossing top wraps col by -shear)
+            (
+                (tr + rows - 1) % rows,
+                if tr > 0 {
+                    tc
+                } else {
+                    (tc + cols - shear) % cols
+                },
+                -1,
+                0,
+            ),
+        ];
+
+        for (ntr, ntc, dr, dc) in neighbors {
+            if cell_set.contains(&(ntr, ntc)) && !plane_of.contains_key(&(ntr, ntc)) {
+                plane_of.insert((ntr, ntc), (pr + dr, pc + dc));
+                queue.push_back((ntr, ntc));
+            }
+        }
     }
+
+    cells.iter().map(|c| *plane_of.get(c).unwrap()).collect()
 }
 
 // ── Plane display grid ────────────────────────────────────────────────────────
-//
-// For display we "unroll" the torus onto the plane, showing 2 copies in each
-// direction so the periodicity and shear are visible.
-//
-// Each torus piece is placed at every copy (nv, nh) of the fundamental domain.
-// The plane cell for torus cell (tr, tc) in copy (nv, nh) is:
-//   pr = tr + nv * rows
-//   pc = tc + nv * shear + nh * cols
-//
-// We only include a copy if *all 5 cells* fall within the display bounds —
-// this gives an irregular boundary where edge pieces that don't fully fit are
-// simply omitted rather than clipped.
 
 struct CellInfo {
-    instance_id: usize, // unique per (piece, copy) — used for border detection
+    piece_id: usize, // unique per piece placement — used for border detection
     color: usize,
     ty: PieceType,
 }
 
+/// Build a plane display grid by BFS-unfolding each piece exactly once.
+/// Returns the grid (row-major) sized to the bounding box of all unfolded cells.
 fn plane_display(
     sol: &Solution,
     rows: usize,
     cols: usize,
     shear: usize,
-    disp_rows: usize,
-    disp_cols: usize,
 ) -> Vec<Vec<Option<CellInfo>>> {
-    let mut grid: Vec<Vec<Option<CellInfo>>> = (0..disp_rows)
-        .map(|_| (0..disp_cols).map(|_| None).collect())
-        .collect();
-
     // Group torus cells by piece placement id.
-    let mut piece_map: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
+    let mut piece_cells: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
     for tr in 0..rows {
         for tc in 0..cols {
             if let Some(pid) = sol.grid_piece[tr][tc] {
-                piece_map.entry(pid).or_default().push((tr, tc));
+                piece_cells.entry(pid).or_default().push((tr, tc));
             }
         }
     }
 
-    let max_nv = disp_rows / rows + 2;
-    let max_nh = disp_cols / cols + 2;
+    // Unfold each piece to get plane coords; collect all plane cells.
+    // Each entry: (plane_r, plane_c, piece_id, color, type)
+    let mut all: Vec<(i32, i32, usize, usize, PieceType)> = Vec::new();
 
-    for (pid, cells) in &piece_map {
-        let color = sol.grid_color[cells[0].0][cells[0].1].unwrap_or(0);
-        let ty = sol.grid_type[cells[0].0][cells[0].1].unwrap_or(PieceType::X);
-
-        for nv in 0..max_nv {
-            for nh in 0..max_nh {
-                let plane: Vec<(usize, usize)> = cells
-                    .iter()
-                    .map(|&(tr, tc)| (tr + nv * rows, tc + nv * shear + nh * cols))
-                    .collect();
-                // Only include this copy if every cell fits in the display.
-                if plane.iter().all(|&(pr, pc)| pr < disp_rows && pc < disp_cols) {
-                    let instance_id = pid * (max_nv * max_nh) + nv * max_nh + nh;
-                    for &(pr, pc) in &plane {
-                        grid[pr][pc] = Some(CellInfo { instance_id, color, ty });
-                    }
-                }
-            }
+    for (&pid, cells) in &piece_cells {
+        let (tr0, tc0) = cells[0];
+        let color = sol.grid_color[tr0][tc0].unwrap_or(0);
+        let ty = sol.grid_type[tr0][tc0].unwrap_or(PieceType::X);
+        for &(pr, pc) in &unfold_piece(cells, rows, cols, shear) {
+            all.push((pr, pc, pid, color, ty));
         }
+    }
+
+    if all.is_empty() {
+        return vec![];
+    }
+
+    let min_r = all.iter().map(|&(pr, ..)| pr).min().unwrap();
+    let min_c = all.iter().map(|&(_, pc, ..)| pc).min().unwrap();
+    let max_r = all.iter().map(|&(pr, ..)| pr).max().unwrap();
+    let max_c = all.iter().map(|&(_, pc, ..)| pc).max().unwrap();
+
+    let disp_rows = (max_r - min_r + 1) as usize;
+    let disp_cols = (max_c - min_c + 1) as usize;
+
+    let mut grid: Vec<Vec<Option<CellInfo>>> = (0..disp_rows)
+        .map(|_| (0..disp_cols).map(|_| None).collect())
+        .collect();
+
+    for (pr, pc, pid, color, ty) in all {
+        let gr = (pr - min_r) as usize;
+        let gc = (pc - min_c) as usize;
+        grid[gr][gc] = Some(CellInfo {
+            piece_id: pid,
+            color,
+            ty,
+        });
     }
 
     grid
@@ -164,119 +234,36 @@ fn type_char(t: Option<PieceType>) -> char {
 
 // ── ANSI 256-color terminal output ────────────────────────────────────────────
 
-/// Print the tiling with ANSI 256-color backgrounds, tiled 2×2 so the
-/// periodicity is visible.  Only complete piece instances are shown; pieces
-/// that would be clipped at the edge are omitted, giving an irregular boundary.
+/// Print the tiling: one colored space per cell, one terminal line per row.
+/// Each piece is BFS-unfolded from the torus so its shape is always connected
+/// and rendered exactly once.  Empty cells (outside the irregular boundary)
+/// are shown as spaces.
 pub fn print_colored(sol: &Solution, rows: usize, cols: usize, shear: usize) {
-    // 2 copies vertically, 2 horizontally.  Extra shear width accommodates the
-    // diagonal shift between the two vertical copies.
-    let disp_rows = rows * 2;
-    let disp_cols = cols * 2 + shear;
-    let grid = plane_display(sol, rows, cols, shear, disp_rows, disp_cols);
-
-    let id = |r: usize, c: usize| grid[r][c].as_ref().map_or(usize::MAX, |x| x.instance_id);
-
-    // Print top border
-    print!("    ");
-    for c in 0..disp_cols {
-        print!("───");
-        if c + 1 < disp_cols {
-            print!("─");
-        }
+    let grid = plane_display(sol, rows, cols, shear);
+    if grid.is_empty() {
+        return;
     }
-    println!("─");
-
-    for r in 0..disp_rows {
-        // Cells row
-        print!("    │");
-        for c in 0..disp_cols {
-            match &grid[r][c] {
+    println!();
+    for row in &grid {
+        print!("  ");
+        for cell in row {
+            match cell {
                 Some(cell) => {
                     let bg = ansi_bg(cell.color);
-                    let fg = if ansi_fg_white(bg) { 15u8 } else { 0u8 };
-                    print!(
-                        "\x1b[48;5;{bg}m\x1b[38;5;{fg}m {:?} \x1b[0m",
-                        cell.ty
-                    );
+                    print!("\x1b[48;5;{bg}m \x1b[0m");
                 }
-                None => print!("   "),
+                None => print!(" "),
             }
-            // right border
-            let right_border = if c + 1 < disp_cols && id(r, c) != id(r, c + 1) {
-                '│'
-            } else {
-                ' '
-            };
-            print!("{right_border}");
         }
-        println!("│");
-
-        // Horizontal separator row (between this row and the next)
-        if r + 1 < disp_rows {
-            print!("    ");
-            for c in 0..disp_cols {
-                // Left corner / junction
-                let left_j = if c == 0 {
-                    if id(r, c) != id(r + 1, c) {
-                        '├'
-                    } else {
-                        '│'
-                    }
-                } else {
-                    let top_sep = id(r, c - 1) != id(r, c);
-                    let bot_sep = id(r + 1, c - 1) != id(r + 1, c);
-                    let vert_l = id(r, c - 1) != id(r + 1, c - 1);
-                    let vert_r = id(r, c) != id(r + 1, c);
-                    junction(top_sep, bot_sep, vert_l, vert_r)
-                };
-                print!("{left_j}");
-                // Horizontal segment
-                if id(r, c) != id(r + 1, c) {
-                    print!("───");
-                } else {
-                    print!("   ");
-                }
-            }
-            // Right edge junction
-            let right_j = if id(r, disp_cols - 1) != id(r + 1, disp_cols - 1) {
-                '┤'
-            } else {
-                '│'
-            };
-            println!("{right_j}");
-        }
+        println!();
     }
-
-    // Bottom border
-    print!("    ");
-    for c in 0..disp_cols {
-        print!("───");
-        if c + 1 < disp_cols {
-            print!("─");
-        }
-    }
-    println!("─");
-}
-
-/// Choose the correct box-drawing junction character.
-fn junction(top_h: bool, bot_h: bool, left_v: bool, right_v: bool) -> char {
-    match (top_h || bot_h, left_v, right_v) {
-        (false, false, false) => ' ',
-        (true, false, false) => '─',
-        (false, true, false) => '│',
-        (false, false, true) => '│',
-        (false, true, true) => '│',
-        (true, true, false) => '┤',
-        (true, false, true) => '├',
-        (true, true, true) => '┼',
-    }
+    println!();
 }
 
 // ── SVG output ────────────────────────────────────────────────────────────────
 
 const CELL: f64 = 48.0; // px per cell
 const MARGIN: f64 = 24.0; // px outer margin
-const THIN: f64 = 0.5; // stroke-width for same-piece cell borders
 const THICK: f64 = 3.0; // stroke-width for piece boundaries
 
 pub fn write_svg(
@@ -286,11 +273,14 @@ pub fn write_svg(
     shear: usize,
     path: &str,
 ) -> std::io::Result<()> {
-    let disp_rows = rows * 2;
-    let disp_cols = cols * 2 + shear;
-    let grid = plane_display(sol, rows, cols, shear, disp_rows, disp_cols);
+    let grid = plane_display(sol, rows, cols, shear);
+    if grid.is_empty() {
+        return Ok(());
+    }
+    let disp_rows = grid.len();
+    let disp_cols = grid[0].len();
 
-    let id = |r: usize, c: usize| grid[r][c].as_ref().map_or(usize::MAX, |x| x.instance_id);
+    let id = |r: usize, c: usize| grid[r][c].as_ref().map_or(usize::MAX, |x| x.piece_id);
 
     let w = MARGIN * 2.0 + CELL * disp_cols as f64;
     let h = MARGIN * 2.0 + CELL * disp_rows as f64;
@@ -303,9 +293,9 @@ pub fn write_svg(
     );
 
     // ── Filled cells ──────────────────────────────────────────────────────────
-    for r in 0..disp_rows {
-        for c in 0..disp_cols {
-            if let Some(cell) = &grid[r][c] {
+    for (r, row) in grid.iter().enumerate() {
+        for (c, cell) in row.iter().enumerate() {
+            if let Some(cell) = cell {
                 let x = MARGIN + c as f64 * CELL;
                 let y = MARGIN + r as f64 * CELL;
                 let fill = svg_fill(cell.color);
@@ -317,9 +307,9 @@ pub fn write_svg(
     }
 
     // ── Type labels ───────────────────────────────────────────────────────────
-    for r in 0..disp_rows {
-        for c in 0..disp_cols {
-            if let Some(cell) = &grid[r][c] {
+    for (r, row) in grid.iter().enumerate() {
+        for (c, cell) in row.iter().enumerate() {
+            if let Some(cell) = cell {
                 let cx = MARGIN + c as f64 * CELL + CELL / 2.0;
                 let cy = MARGIN + r as f64 * CELL + CELL / 2.0;
                 out += &format!(
@@ -331,26 +321,6 @@ pub fn write_svg(
                 );
             }
         }
-    }
-
-    // ── Cell grid (thin) ──────────────────────────────────────────────────────
-    for r in 0..=disp_rows {
-        let y = MARGIN + r as f64 * CELL;
-        let x0 = MARGIN;
-        let x1 = MARGIN + disp_cols as f64 * CELL;
-        out += &format!(
-            "  <line x1=\"{x0:.1}\" y1=\"{y:.1}\" x2=\"{x1:.1}\" y2=\"{y:.1}\" \
-             stroke=\"#00000040\" stroke-width=\"{THIN}\"/>\n"
-        );
-    }
-    for c in 0..=disp_cols {
-        let x = MARGIN + c as f64 * CELL;
-        let y0 = MARGIN;
-        let y1 = MARGIN + disp_rows as f64 * CELL;
-        out += &format!(
-            "  <line x1=\"{x:.1}\" y1=\"{y0:.1}\" x2=\"{x:.1}\" y2=\"{y1:.1}\" \
-             stroke=\"#00000040\" stroke-width=\"{THIN}\"/>\n"
-        );
     }
 
     // ── Piece boundaries (thick) ──────────────────────────────────────────────
@@ -383,23 +353,15 @@ pub fn write_svg(
             }
         }
     }
-    // Outer border
-    let x0 = MARGIN;
-    let y0 = MARGIN;
-    let x1 = MARGIN + disp_cols as f64 * CELL;
-    let y1 = MARGIN + disp_rows as f64 * CELL;
-    out += &format!(
-        "  <rect x=\"{x0:.1}\" y=\"{y0:.1}\" width=\"{:.1}\" height=\"{:.1}\" \
-         fill=\"none\" stroke=\"#111\" stroke-width=\"{THICK}\"/>\n",
-        x1 - x0,
-        y1 - y0
-    );
 
     // ── Torus annotation ──────────────────────────────────────────────────────
     let label = if shear > 0 {
-        format!("{}×{} torus, shear={} — wraps in both directions", rows, cols, shear)
+        format!(
+            "{}×{} torus, shear={} — one copy of each tile",
+            rows, cols, shear
+        )
     } else {
-        format!("{}×{} torus — wraps in both directions", rows, cols)
+        format!("{}×{} torus — one copy of each tile", rows, cols)
     };
     let lx = w / 2.0;
     let ly = h - MARGIN / 2.0;

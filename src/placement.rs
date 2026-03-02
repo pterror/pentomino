@@ -55,7 +55,13 @@ fn to_torus(plane_r: i32, plane_c: i32, rows: usize, cols: usize, shear: usize) 
 }
 
 /// Returns the four orthogonal neighbours of `(r, c)` on the torus.
-pub fn neighbours(r: usize, c: usize, rows: usize, cols: usize, shear: usize) -> [(usize, usize); 4] {
+pub fn neighbours(
+    r: usize,
+    c: usize,
+    rows: usize,
+    cols: usize,
+    shear: usize,
+) -> [(usize, usize); 4] {
     // Up: crossing the top boundary shifts c by -shear.
     let (up_r, up_c) = if r == 0 {
         (rows - 1, (c + cols - shear % cols) % cols)

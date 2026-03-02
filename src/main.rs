@@ -121,7 +121,9 @@ fn parse_piece(s: &str) -> PieceType {
 fn torus_sizes(min: usize, max: usize) -> Vec<(usize, usize)> {
     let mut sizes = Vec::new();
     for area in (5..=(max * max)).step_by(5) {
-        for rows in 1..=max {
+        // Iterate rows descending so squarer (larger rows) shapes come first
+        // within the same area, e.g. 2×5 before 1×10.
+        for rows in (1..=max).rev() {
             if area % rows != 0 {
                 continue;
             }
@@ -152,7 +154,11 @@ struct RunOpts<'a> {
 fn run_multiset(types: &[PieceType], opts: &RunOpts) -> TripleResult {
     // If a specific shear is requested, only try that one.
     // Otherwise (shear=usize::MAX sentinel), try all shears 0..cols.
-    let specific_shear = if opts.shear == usize::MAX { None } else { Some(opts.shear) };
+    let specific_shear = if opts.shear == usize::MAX {
+        None
+    } else {
+        Some(opts.shear)
+    };
 
     for (rows, cols) in torus_sizes(opts.min, opts.max) {
         let shears: Box<dyn Iterator<Item = usize>> = match specific_shear {
@@ -166,7 +172,13 @@ fn run_multiset(types: &[PieceType], opts: &RunOpts) -> TripleResult {
                 if shear == 0 {
                     print!("  {}×{} ({} pieces)... ", rows, cols, rows * cols / 5);
                 } else {
-                    print!("  {}×{} shear={} ({} pieces)... ", rows, cols, shear, rows * cols / 5);
+                    print!(
+                        "  {}×{} shear={} ({} pieces)... ",
+                        rows,
+                        cols,
+                        shear,
+                        rows * cols / 5
+                    );
                 }
                 std::io::stdout().flush().ok();
             }
