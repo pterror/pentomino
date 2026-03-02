@@ -3,6 +3,7 @@ mod pentomino;
 mod placement;
 mod solver;
 mod triples;
+mod wfc;
 
 use clap::{Parser, Subcommand};
 use pentomino::PieceType;
@@ -75,6 +76,9 @@ enum Command {
         /// Without this, a sub-set solution is accepted.
         #[arg(long, default_value_t = true)]
         require_all_types: bool,
+        /// Use WFC-style DPLL solver instead of varisat SAT solver
+        #[arg(long, default_value_t = false)]
+        wfc: bool,
     },
     /// Run all k-multisets of piece types, saving results to a JSON database.
     ///
@@ -104,6 +108,9 @@ enum Command {
         /// Render 8 dimmed tiled copies around the fundamental domain in each SVG
         #[arg(long, default_value_t = false)]
         tile_copies: bool,
+        /// Use WFC-style DPLL solver instead of varisat SAT solver
+        #[arg(long, default_value_t = false)]
+        wfc: bool,
     },
     /// Print a summary of the results database.
     Summary {
@@ -182,6 +189,7 @@ struct RunOpts<'a> {
     /// Print treewidth upper bound for each (rows, cols, shear) tried.
     treewidth: bool,
     require_all_types: bool,
+    wfc: bool,
 }
 
 fn run_multiset(types: &[PieceType], opts: &RunOpts) -> TripleResult {
@@ -245,7 +253,12 @@ fn run_multiset(types: &[PieceType], opts: &RunOpts) -> TripleResult {
                 std::io::stdout().flush().ok();
             }
 
-            match solver::solve(rows, cols, shear, types, opts.require_all_types) {
+            let solution = if opts.wfc {
+                wfc::solve(rows, cols, shear, types, opts.require_all_types)
+            } else {
+                solver::solve(rows, cols, shear, types, opts.require_all_types)
+            };
+            match solution {
                 Some(solution) => {
                     if opts.verbose {
                         println!("SAT");
@@ -358,6 +371,7 @@ fn main() {
             treewidth,
             no_color,
             require_all_types,
+            wfc,
         } => {
             let types: Vec<PieceType> = types.iter().map(|s| parse_piece(s)).collect();
 
@@ -400,6 +414,7 @@ fn main() {
                 dump_graph: dump_graph.as_deref(),
                 treewidth,
                 require_all_types,
+                wfc,
             };
             let result = run_multiset(&types, &opts);
 
@@ -436,6 +451,7 @@ fn main() {
             size,
             svg_dir,
             tile_copies,
+            wfc,
         } => {
             let mut results_db = ResultsDb::load(&db);
 
@@ -530,6 +546,8 @@ fn main() {
                         // entries written by older versions of the tool.
                         let sol = if !placements.is_empty() {
                             Some(records_to_solution(placements, rows, cols))
+                        } else if wfc {
+                            wfc::solve(rows, cols, shear, types, true)
                         } else {
                             solver::solve(rows, cols, shear, types, true)
                         };
@@ -584,7 +602,12 @@ fn main() {
                             continue;
                         }
 
-                        match solver::solve(rows, cols, shear, types, true) {
+                        let sol = if wfc {
+                            wfc::solve(rows, cols, shear, types, true)
+                        } else {
+                            solver::solve(rows, cols, shear, types, true)
+                        };
+                        match sol {
                             Some(solution) => {
                                 let size_str = if shear > 0 {
                                     format!("{}×{} shear={}", rows, cols, shear)

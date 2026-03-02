@@ -48,22 +48,31 @@ pub struct Solution {
 
 // ── Shared problem setup ──────────────────────────────────────────────────────
 
-struct Problem {
+pub(crate) struct Problem {
     /// Number of placement variables.
-    n: usize,
+    pub(crate) n: usize,
     /// global[idx] = (color_index, placement)
-    global: Vec<(usize, crate::placement::Placement)>,
+    pub(crate) global: Vec<(usize, crate::placement::Placement)>,
     /// color_start[c] = first global index for color c.
-    color_start: Vec<usize>,
+    pub(crate) color_start: Vec<usize>,
     /// color_len[c] = number of placements for color c.
-    color_len: Vec<usize>,
+    pub(crate) color_len: Vec<usize>,
     /// cell → list of global variable indices covering that cell.
-    cell_to_vars: Vec<Vec<usize>>,
+    pub(crate) cell_to_vars: Vec<Vec<usize>>,
     /// Same-color adjacent placement pairs (i < j).
-    conflict_pairs: HashSet<(usize, usize)>,
+    pub(crate) conflict_pairs: HashSet<(usize, usize)>,
+    /// Combined conflict adjacency: exact-cover overlap + same-color adjacency.
+    pub(crate) adj: Vec<Vec<usize>>,
+    /// Flat cell indices (r*cols+c) covered by each placement.
+    pub(crate) p_cells: Vec<Vec<usize>>,
 }
 
-fn build_problem(rows: usize, cols: usize, shear: usize, types: &[PieceType]) -> Option<Problem> {
+pub(crate) fn build_problem(
+    rows: usize,
+    cols: usize,
+    shear: usize,
+    types: &[PieceType],
+) -> Option<Problem> {
     let all = all_pieces();
     let unique_shapes: HashSet<PieceType> = types.iter().cloned().collect();
     let pieces: Vec<_> = all
@@ -131,6 +140,29 @@ fn build_problem(rows: usize, cols: usize, shear: usize, types: &[PieceType]) ->
         }
     }
 
+    // Precompute combined conflict adjacency (exact-cover + same-color) and flat cell lists.
+    let mut adj: Vec<Vec<usize>> = vec![vec![]; n];
+    for covers in &cell_to_vars {
+        for (a, &i) in covers.iter().enumerate() {
+            for &j in &covers[a + 1..] {
+                adj[i].push(j);
+                adj[j].push(i);
+            }
+        }
+    }
+    for &(i, j) in &conflict_pairs {
+        adj[i].push(j);
+        adj[j].push(i);
+    }
+    for a in adj.iter_mut() {
+        a.sort_unstable();
+        a.dedup();
+    }
+    let p_cells: Vec<Vec<usize>> = global
+        .iter()
+        .map(|(_, p)| p.cells.iter().map(|&(r, c)| r * cols + c).collect())
+        .collect();
+
     Some(Problem {
         n,
         global,
@@ -138,6 +170,8 @@ fn build_problem(rows: usize, cols: usize, shear: usize, types: &[PieceType]) ->
         color_len,
         cell_to_vars,
         conflict_pairs,
+        adj,
+        p_cells,
     })
 }
 
@@ -166,12 +200,11 @@ pub fn write_conflict_graph(
     };
 
     // Collect all edges (overlap from exact cover + same-color adjacency).
-    let mut edges: HashSet<(usize, usize)> = prob.conflict_pairs.clone();
-    for covers in &prob.cell_to_vars {
-        for (a, &i) in covers.iter().enumerate() {
-            for &j in &covers[a + 1..] {
-                let (lo, hi) = if i < j { (i, j) } else { (j, i) };
-                edges.insert((lo, hi));
+    let mut edges: HashSet<(usize, usize)> = HashSet::new();
+    for (i, neighbors) in prob.adj.iter().enumerate() {
+        for &j in neighbors {
+            if i < j {
+                edges.insert((i, j));
             }
         }
     }
@@ -208,19 +241,11 @@ pub fn treewidth_upper_bound(
     let prob = build_problem(rows, cols, shear, types)?;
 
     // Adjacency sets (mutable — we'll add fill edges during elimination).
-    let mut adj: Vec<HashSet<usize>> = vec![HashSet::new(); prob.n];
-    for covers in &prob.cell_to_vars {
-        for (a, &i) in covers.iter().enumerate() {
-            for &j in &covers[a + 1..] {
-                adj[i].insert(j);
-                adj[j].insert(i);
-            }
-        }
-    }
-    for &(i, j) in &prob.conflict_pairs {
-        adj[i].insert(j);
-        adj[j].insert(i);
-    }
+    let mut adj: Vec<HashSet<usize>> = prob
+        .adj
+        .iter()
+        .map(|v| v.iter().cloned().collect())
+        .collect();
 
     let mut eliminated = vec![false; prob.n];
     let mut tw_upper = 0usize;
@@ -272,41 +297,15 @@ pub fn treewidth_upper_bound(
 ///
 /// Runs to fixpoint. Returns `None` if any cell is left with zero candidates
 /// (problem is UNSAT). Otherwise returns `(alive, n_eliminated)`.
-fn arc_consistency(
-    n: usize,
-    global: &[(usize, crate::placement::Placement)],
+pub(crate) fn arc_consistency(
     cell_to_vars: &[Vec<usize>],
-    conflict_pairs: &HashSet<(usize, usize)>,
-    cols: usize,
+    adj: &[Vec<usize>],
+    p_cells: &[Vec<usize>],
     initial_dead: &[bool],
 ) -> Option<(Vec<bool>, usize)> {
+    let n = initial_dead.len();
     let mut alive: Vec<bool> = initial_dead.iter().map(|&d| !d).collect();
     let total_initial_dead = initial_dead.iter().filter(|&&d| d).count();
-
-    // Build combined conflict adjacency: exact-cover overlap + same-color adjacency.
-    let mut adj: Vec<Vec<usize>> = vec![vec![]; n];
-    for covers in cell_to_vars {
-        for (a, &i) in covers.iter().enumerate() {
-            for &j in &covers[a + 1..] {
-                adj[i].push(j);
-                adj[j].push(i);
-            }
-        }
-    }
-    for &(i, j) in conflict_pairs {
-        adj[i].push(j);
-        adj[j].push(i);
-    }
-    for a in adj.iter_mut() {
-        a.sort_unstable();
-        a.dedup();
-    }
-
-    // Cell indices (flat: r*cols+c) covered by each placement.
-    let p_cells: Vec<Vec<usize>> = global
-        .iter()
-        .map(|(_, p)| p.cells.iter().map(|&(r, c)| r * cols + c).collect())
-        .collect();
 
     // Reusable bitvector — avoids per-iteration allocations.
     let mut killed = vec![false; n];
@@ -379,36 +378,22 @@ pub fn solve(
     require_all_types: bool,
 ) -> Option<Solution> {
     let prob = build_problem(rows, cols, shear, types)?;
-    let Problem {
-        n,
-        global,
-        color_start,
-        color_len,
-        cell_to_vars,
-        conflict_pairs,
-    } = prob;
 
     // ── Arc-consistency pre-propagation ───────────────────────────────────
     // Seed propagation with the translational symmetry breaking: cell (0,0)
     // must be covered by color 0, so all other colors' placements covering
     // cell (0,0) are dead from the start.  Propagating from these seeds is
     // much more effective than cold-start propagation on large tori.
-    let mut initial_dead = vec![false; n];
-    for &var_idx in &cell_to_vars[0] {
-        let (color, _) = &global[var_idx];
+    let mut initial_dead = vec![false; prob.n];
+    for &var_idx in &prob.cell_to_vars[0] {
+        let (color, _) = &prob.global[var_idx];
         if *color != 0 {
             initial_dead[var_idx] = true;
         }
     }
 
-    let (alive, _n_elim) = arc_consistency(
-        n,
-        &global,
-        &cell_to_vars,
-        &conflict_pairs,
-        cols,
-        &initial_dead,
-    )?;
+    let (alive, _n_elim) =
+        arc_consistency(&prob.cell_to_vars, &prob.adj, &prob.p_cells, &initial_dead)?;
 
     let mut solver = Solver::new();
     let pos = |i: usize| Lit::from_index(i, true);
@@ -422,7 +407,7 @@ pub fn solve(
     }
 
     // ── Constraint 1: Exact cover ──────────────────────────────────────────
-    for covers in &cell_to_vars {
+    for covers in &prob.cell_to_vars {
         let alive_covers: Vec<usize> = covers.iter().copied().filter(|&i| alive[i]).collect();
         if alive_covers.is_empty() {
             return None; // cell uncoverable after propagation
@@ -436,13 +421,13 @@ pub fn solve(
     }
 
     // ── Constraint 2: No same-color adjacency ─────────────────────────────
-    for (i, j) in conflict_pairs {
-        solver.add_clause(&[neg(i), neg(j)]);
+    for (i, j) in &prob.conflict_pairs {
+        solver.add_clause(&[neg(*i), neg(*j)]);
     }
 
     // ── Constraint 3 (optional): all colors must appear ───────────────────
     if require_all_types {
-        for (start, len) in color_start.iter().zip(color_len.iter()) {
+        for (start, len) in prob.color_start.iter().zip(prob.color_len.iter()) {
             let type_lits: Vec<Lit> = (*start..*start + *len)
                 .filter(|&p| alive[p])
                 .map(pos)
@@ -458,8 +443,8 @@ pub fn solve(
     // Any valid tiling can be translated so color 0 covers cell (0,0).
     // Force cell (0,0) to be covered by color 0 by forbidding all other colors
     // from covering it.
-    for &var_idx in &cell_to_vars[0] {
-        let (color, _) = &global[var_idx];
+    for &var_idx in &prob.cell_to_vars[0] {
+        let (color, _) = &prob.global[var_idx];
         if *color != 0 {
             solver.add_clause(&[neg(var_idx)]);
         }
@@ -493,15 +478,15 @@ pub fn solve(
                 for b in a + 1..group.len() {
                     let ci = group[a];
                     let cj = group[b];
-                    let start_i = color_start[ci];
-                    let len_i = color_len[ci];
-                    let start_j = color_start[cj];
-                    let len_j = color_len[cj];
+                    let start_i = prob.color_start[ci];
+                    let len_i = prob.color_len[ci];
+                    let start_j = prob.color_start[cj];
+                    let len_j = prob.color_len[cj];
 
                     // Precompute min cell index for each placement of ci.
                     let min_cells_i: Vec<usize> = (start_i..start_i + len_i)
                         .map(|p| {
-                            global[p]
+                            prob.global[p]
                                 .1
                                 .cells
                                 .iter()
@@ -513,7 +498,7 @@ pub fn solve(
 
                     for qk in 0..len_j {
                         let q_global = start_j + qk;
-                        let min_q = global[q_global]
+                        let min_q = prob.global[q_global]
                             .1
                             .cells
                             .iter()
@@ -545,7 +530,7 @@ pub fn solve(
             let mut grid_piece = vec![vec![None; cols]; rows];
 
             let mut piece_plane_cells: HashMap<usize, Vec<(i32, i32)>> = HashMap::new();
-            for (idx, (color, p)) in global.iter().enumerate() {
+            for (idx, (color, p)) in prob.global.iter().enumerate() {
                 if model[idx].is_positive() {
                     for &(r, c) in &p.cells {
                         grid_type[r][c] = Some(p.piece_type);

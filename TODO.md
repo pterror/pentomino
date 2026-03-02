@@ -28,6 +28,15 @@
   advantage over SAT: torus translational symmetry means one learned
   pattern fires at all rows×cols positions simultaneously.
 
+  Current status: `--wfc` flag implements DPLL+arc-consistency without
+  pattern learning (`src/wfc.rs`).  Benchmarks show WFC is ~2.4× *slower*
+  than varisat on hard UNSAT instances (e.g. FIL up to 15×15: 61s vs 25s)
+  because arc_consistency is O(n²) per DPLL node while varisat uses
+  watched literals + CDCL.  Pattern learning is the key missing piece —
+  learned patterns exploit torus translation symmetry to prune globally
+  from a single local contradiction.  Without it there is no advantage
+  over varisat.
+
   Piece representation: instead of enumerating explicit placements,
   define each piece type by *local rules* (e.g. I = no bends, no T/X
   junctions, dead ends don't touch, exactly 3 consecutive straights).
