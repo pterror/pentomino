@@ -94,10 +94,24 @@ pub fn neighbours(
     ]
 }
 
-/// Returns true if any two cells in this placement are torus-adjacent but were
-/// not plane-adjacent in the original shape.  This catches pieces that wrap so
-/// far they touch their own boundary (e.g. I on a 1×5 torus) while still
-/// allowing pieces that merely cross the square boundary without self-contact.
+/// Returns true if this placement is invalid due to torus self-adjacency.
+///
+/// Two failure modes:
+///
+/// 1. **Wrap-around self-touch**: two cells that are torus-adjacent but their
+///    plane cells are NOT plane-adjacent.  The piece wraps so far it touches
+///    its own boundary (e.g. I on a 1×5 torus).
+///
+/// 2. **Cross-period self-adjacency**: two cells that are torus-adjacent AND
+///    plane-adjacent, but come from *different copies* of the fundamental
+///    domain (different lattice coordinates (m, n)).  In the periodically
+///    tiled plane the piece would be adjacent to its own copy in the
+///    neighbouring period — same-colour adjacency violation.
+///
+///    Example: on a 1×N shear=1 torus a vertical I spanning plane rows 0–4
+///    has plane cells (0,c) and (1,c) which are plane-adjacent.  But (0,c) is
+///    in copy m=0 and (1,c) is in copy m=1.  In the tiled plane, the piece in
+///    copy (0,0) is adjacent to the piece in copy (1,0).
 fn has_torus_self_adjacency(
     plane_cells: &[(i32, i32)],
     torus_cells: &[(usize, usize)],
@@ -114,6 +128,17 @@ fn has_torus_self_adjacency(
                     let (pr, pc) = plane_cells[i];
                     let (qr, qc) = plane_cells[j];
                     if (pr - qr).abs() + (pc - qc).abs() != 1 {
+                        // Failure mode 1: torus-adjacent but not plane-adjacent.
+                        return true;
+                    }
+                    // Failure mode 2: plane-adjacent but from different copies.
+                    // Lattice copy of a plane cell: m = r / rows (div_euclid),
+                    // n = (c - m*shear) / cols (div_euclid).
+                    let mi = pr.div_euclid(rows as i32);
+                    let mj = qr.div_euclid(rows as i32);
+                    let ni = (pc - mi * shear as i32).div_euclid(cols as i32);
+                    let nj = (qc - mj * shear as i32).div_euclid(cols as i32);
+                    if mi != mj || ni != nj {
                         return true;
                     }
                 }
