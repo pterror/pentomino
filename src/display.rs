@@ -162,21 +162,16 @@ fn type_char(t: Option<PieceType>) -> char {
 // ── ANSI 256-color terminal output ────────────────────────────────────────────
 
 /// Print the tiling: one colored space per cell, one terminal line per row.
-/// Each piece is BFS-unfolded from the torus so its shape is always connected
-/// and rendered exactly once.  Empty cells (outside the irregular boundary)
-/// are shown as spaces.
+/// Shows the torus grid directly (rows×cols): each cell colored by its piece.
+/// This always produces a tight, gap-free display for any torus geometry.
 pub fn print_colored(sol: &Solution, rows: usize, cols: usize, _shear: usize) {
-    let grid = plane_display(sol, rows, cols);
-    if grid.is_empty() {
-        return;
-    }
     println!();
-    for row in &grid {
+    for r in 0..rows {
         print!("  ");
-        for cell in row {
-            match cell {
-                Some(cell) => {
-                    let bg = ansi_bg(cell.color);
+        for c in 0..cols {
+            match sol.grid_color[r][c] {
+                Some(color) => {
+                    let bg = ansi_bg(color);
                     print!("\x1b[48;5;{bg}m \x1b[0m");
                 }
                 None => print!(" "),
