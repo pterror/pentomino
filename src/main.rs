@@ -42,6 +42,11 @@ enum Command {
         /// Maximum torus dimension to try
         #[arg(long, default_value_t = 20)]
         max: usize,
+        /// Oblique torus shear. The vertical period vector is (shear, rows):
+        /// crossing the top edge shifts `shear` columns to the right.
+        /// Omit to search all shears 0..cols automatically.
+        #[arg(long)]
+        shear: Option<usize>,
         /// Verify the solution after finding it
         #[arg(long, default_value_t = true)]
         verify: bool,
@@ -136,6 +141,7 @@ fn torus_sizes(min: usize, max: usize) -> Vec<(usize, usize)> {
 struct RunOpts<'a> {
     min: usize,
     max: usize,
+    shear: usize,
     verify: bool,
     verbose: bool,
     color: bool,
@@ -144,36 +150,52 @@ struct RunOpts<'a> {
 }
 
 fn run_multiset(types: &[PieceType], opts: &RunOpts) -> TripleResult {
-    for (rows, cols) in torus_sizes(opts.min, opts.max) {
-        if opts.verbose {
-            print!("  {}×{} ({} pieces)... ", rows, cols, rows * cols / 5);
-            std::io::stdout().flush().ok();
-        }
+    // If a specific shear is requested, only try that one.
+    // Otherwise (shear=usize::MAX sentinel), try all shears 0..cols.
+    let specific_shear = if opts.shear == usize::MAX { None } else { Some(opts.shear) };
 
-        match solver::solve(rows, cols, types, opts.require_all_types) {
-            Some(solution) => {
-                if opts.verbose {
-                    println!("SAT");
-                    if opts.color {
-                        display::print_colored(&solution, rows, cols);
-                    } else {
-                        display::print_solution(&solution, rows, cols);
-                    }
+    for (rows, cols) in torus_sizes(opts.min, opts.max) {
+        let shears: Box<dyn Iterator<Item = usize>> = match specific_shear {
+            Some(s) => Box::new(std::iter::once(s)),
+            // shear s and cols-s are mirror images; free pentominoes include
+            // reflections so we only need 0..=cols/2.
+            None => Box::new(0..=cols / 2),
+        };
+        for shear in shears {
+            if opts.verbose {
+                if shear == 0 {
+                    print!("  {}×{} ({} pieces)... ", rows, cols, rows * cols / 5);
+                } else {
+                    print!("  {}×{} shear={} ({} pieces)... ", rows, cols, shear, rows * cols / 5);
                 }
-                if opts.verify {
-                    solver::verify(&solution, rows, cols);
-                    if opts.verbose {
-                        println!("  ✓ verified");
-                    }
-                }
-                if let Some(path) = opts.svg {
-                    display::write_svg(&solution, rows, cols, path).unwrap();
-                }
-                return TripleResult::Sat { rows, cols };
+                std::io::stdout().flush().ok();
             }
-            None => {
-                if opts.verbose {
-                    println!("unsat");
+
+            match solver::solve(rows, cols, shear, types, opts.require_all_types) {
+                Some(solution) => {
+                    if opts.verbose {
+                        println!("SAT");
+                        if opts.color {
+                            display::print_colored(&solution, rows, cols, shear);
+                        } else {
+                            display::print_solution(&solution, rows, cols);
+                        }
+                    }
+                    if opts.verify {
+                        solver::verify(&solution, rows, cols, shear);
+                        if opts.verbose {
+                            println!("  ✓ verified");
+                        }
+                    }
+                    if let Some(path) = opts.svg {
+                        display::write_svg(&solution, rows, cols, shear, path).unwrap();
+                    }
+                    return TripleResult::Sat { rows, cols };
+                }
+                None => {
+                    if opts.verbose {
+                        println!("unsat");
+                    }
                 }
             }
         }
@@ -200,6 +222,7 @@ fn main() {
             types,
             min,
             max,
+            shear,
             verify,
             svg,
             no_color,
@@ -223,6 +246,7 @@ fn main() {
             let opts = RunOpts {
                 min,
                 max,
+                shear: shear.unwrap_or(usize::MAX),
                 verify,
                 verbose: true,
                 color: !no_color,
@@ -300,6 +324,7 @@ fn main() {
                     &RunOpts {
                         min: 1,
                         max,
+                        shear: 0,
                         verify: true,
                         verbose: false,
                         color: false,

@@ -30,7 +30,7 @@
 //! docs/proof-strategy.md for the full proof story.
 
 use crate::pentomino::{all_pieces, PieceType};
-use crate::placement::enumerate_placements;
+use crate::placement::{enumerate_placements, neighbours};
 use std::collections::{HashMap, HashSet};
 use varisat::{ExtendFormula, Lit, Solver};
 
@@ -57,6 +57,7 @@ pub struct Solution {
 pub fn solve(
     rows: usize,
     cols: usize,
+    shear: usize,
     types: &[PieceType],
     require_all_types: bool,
 ) -> Option<Solution> {
@@ -70,7 +71,7 @@ pub fn solve(
         .collect();
 
     // shape_placements[shape] = list of distinct placements for that shape.
-    let raw = enumerate_placements(rows, cols, &pieces);
+    let raw = enumerate_placements(rows, cols, shear, &pieces);
     let mut shape_placements: HashMap<PieceType, Vec<_>> = HashMap::new();
     for p in raw {
         shape_placements.entry(p.piece_type).or_default().push(p);
@@ -133,14 +134,7 @@ pub fn solve(
     }
 
     // ── Constraint 2: No same-color adjacency ─────────────────────────────
-    let nbrs = |r: usize, c: usize| -> [(usize, usize); 4] {
-        [
-            ((r + rows - 1) % rows, c),
-            ((r + 1) % rows, c),
-            (r, (c + cols - 1) % cols),
-            (r, (c + 1) % cols),
-        ]
-    };
+    let nbrs = |r: usize, c: usize| neighbours(r, c, rows, cols, shear);
 
     let mut conflict_pairs: HashSet<(usize, usize)> = HashSet::new();
 
@@ -209,7 +203,7 @@ pub fn solve(
 }
 
 /// Verify a solution: exact cover + no same-color adjacency. Panics on error.
-pub fn verify(solution: &Solution, rows: usize, cols: usize) {
+pub fn verify(solution: &Solution, rows: usize, cols: usize, shear: usize) {
     // Every cell covered exactly once
     for r in 0..rows {
         for c in 0..cols {
@@ -228,14 +222,7 @@ pub fn verify(solution: &Solution, rows: usize, cols: usize) {
         }
     }
     // No same-color orthogonal adjacency
-    let nbrs = |r: usize, c: usize| -> [(usize, usize); 4] {
-        [
-            ((r + rows - 1) % rows, c),
-            ((r + 1) % rows, c),
-            (r, (c + cols - 1) % cols),
-            (r, (c + 1) % cols),
-        ]
-    };
+    let nbrs = |r: usize, c: usize| neighbours(r, c, rows, cols, shear);
     for r in 0..rows {
         for c in 0..cols {
             let color = solution.grid_color[r][c].unwrap();
