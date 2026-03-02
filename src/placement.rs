@@ -72,15 +72,17 @@ pub fn neighbours(
     cols: usize,
     shear: usize,
 ) -> [(usize, usize); 4] {
-    // Up: crossing the top boundary shifts c by -shear.
+    // Up: plane row decreases by 1.  Crossing the top boundary means n decreases
+    // by 1, so c = (C − n·shear) increases by shear.
     let (up_r, up_c) = if r == 0 {
-        (rows - 1, (c + cols - shear % cols) % cols)
+        (rows - 1, (c + shear) % cols)
     } else {
         (r - 1, c)
     };
-    // Down: crossing the bottom boundary shifts c by +shear.
+    // Down: plane row increases by 1.  Crossing the bottom boundary means n
+    // increases by 1, so c = (C − n·shear) decreases by shear.
     let (dn_r, dn_c) = if r == rows - 1 {
-        (0, (c + shear) % cols)
+        (0, (c + cols - shear % cols) % cols)
     } else {
         (r + 1, c)
     };
