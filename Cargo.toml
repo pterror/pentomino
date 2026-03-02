@@ -1,0 +1,22 @@
+[package]
+name = "pentomino"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "pentomino"
+path = "src/main.rs"
+
+[dependencies]
+# Pure-Rust CDCL SAT solver. Swap for cadical-sys if you need DRAT proof output.
+varisat = "0.2"
+# Serialization for persisting results across runs
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# CLI arg parsing
+clap = { version = "4", features = ["derive"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

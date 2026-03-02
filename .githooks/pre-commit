@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -e
+
+# Ensure cargo is available (handles nix-shell environments)
+if ! command -v cargo &>/dev/null; then
+  echo "cargo not found — skipping pre-commit checks (run inside nix develop)"
+  exit 0
+fi
+
+echo "Running cargo fmt..."
+cargo fmt --all
+git add -u
+
+echo "Running cargo clippy..."
+cargo clippy --all-targets --all-features -- -D warnings
+
+echo "Pre-commit checks passed!"
