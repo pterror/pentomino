@@ -36,6 +36,12 @@ enum Command {
         /// Piece types (F I L N P T U V W X Y Z); duplicates are distinct colors.
         #[arg(num_args = 1..=12)]
         types: Vec<String>,
+        /// Fix the number of rows (must also set --cols; skips the size search).
+        #[arg(long)]
+        rows: Option<usize>,
+        /// Fix the number of columns (must also set --rows; skips the size search).
+        #[arg(long)]
+        cols: Option<usize>,
         /// Minimum torus dimension to start from (rows and cols both ≥ this)
         #[arg(long, default_value_t = 1)]
         min: usize,
@@ -141,6 +147,8 @@ fn torus_sizes(min: usize, max: usize) -> Vec<(usize, usize)> {
 }
 
 struct RunOpts<'a> {
+    /// If Some, only try this exact (rows, cols); otherwise search via torus_sizes.
+    exact: Option<(usize, usize)>,
     min: usize,
     max: usize,
     shear: usize,
@@ -160,7 +168,12 @@ fn run_multiset(types: &[PieceType], opts: &RunOpts) -> TripleResult {
         Some(opts.shear)
     };
 
-    for (rows, cols) in torus_sizes(opts.min, opts.max) {
+    let sizes: Box<dyn Iterator<Item = (usize, usize)>> = match opts.exact {
+        Some(rc) => Box::new(std::iter::once(rc)),
+        None => Box::new(torus_sizes(opts.min, opts.max).into_iter()),
+    };
+
+    for (rows, cols) in sizes {
         let shears: Box<dyn Iterator<Item = usize>> = match specific_shear {
             Some(s) => Box::new(std::iter::once(s)),
             // shear s and cols-s are mirror images; free pentominoes include
@@ -232,6 +245,8 @@ fn main() {
     match cli.command {
         Command::Solve {
             types,
+            rows,
+            cols,
             min,
             max,
             shear,
@@ -242,20 +257,34 @@ fn main() {
         } => {
             let types: Vec<PieceType> = types.iter().map(|s| parse_piece(s)).collect();
 
+            let exact = match (rows, cols) {
+                (Some(r), Some(c)) => Some((r, c)),
+                (None, None) => None,
+                _ => {
+                    eprintln!("error: --rows and --cols must be given together");
+                    std::process::exit(1);
+                }
+            };
+
             println!(
                 "Searching for {} tiling (no same-color adjacency)",
                 multiset_label(&types)
             );
-            println!(
-                "Rectangular tori, rows×cols divisible by 5, min={} max={}",
-                min, max
-            );
+            if let Some((r, c)) = exact {
+                println!("{}×{} torus", r, c);
+            } else {
+                println!(
+                    "Rectangular tori, rows×cols divisible by 5, min={} max={}",
+                    min, max
+                );
+            }
             if require_all_types {
                 println!("(all {} colors must appear)", types.len());
             }
             println!();
 
             let opts = RunOpts {
+                exact,
                 min,
                 max,
                 shear: shear.unwrap_or(usize::MAX),
@@ -273,11 +302,15 @@ fn main() {
                     println!("RESULT: SAT on {}×{} torus", rows, cols);
                 }
                 TripleResult::Unsat { max_rows, max_cols } => {
-                    println!(
-                        "RESULT: No solution found for tori up to {}×{}",
-                        max_rows, max_cols
-                    );
-                    println!("(This is computational evidence, not a formal proof — see docs/proof-strategy.md)");
+                    if let Some((r, c)) = exact {
+                        println!("RESULT: No solution found on {}×{} torus", r, c);
+                    } else {
+                        println!(
+                            "RESULT: No solution found for tori up to {}×{}",
+                            max_rows, max_cols
+                        );
+                        println!("(This is computational evidence, not a formal proof — see docs/proof-strategy.md)");
+                    }
                 }
                 _ => unreachable!(),
             }
@@ -334,6 +367,7 @@ fn main() {
                 let result = run_multiset(
                     types,
                     &RunOpts {
+                        exact: None,
                         min: 1,
                         max,
                         shear: 0,
