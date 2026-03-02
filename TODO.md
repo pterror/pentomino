@@ -28,14 +28,26 @@
   advantage over SAT: torus translational symmetry means one learned
   pattern fires at all rows×cols positions simultaneously.
 
-  Current status: `--wfc` flag implements DPLL+arc-consistency without
-  pattern learning (`src/wfc.rs`).  Benchmarks show WFC is ~2.4× *slower*
-  than varisat on hard UNSAT instances (e.g. FIL up to 15×15: 61s vs 25s)
-  because arc_consistency is O(n²) per DPLL node while varisat uses
-  watched literals + CDCL.  Pattern learning is the key missing piece —
-  learned patterns exploit torus translation symmetry to prune globally
-  from a single local contradiction.  Without it there is no advantage
-  over varisat.
+  Current status: `--wfc` flag implements DPLL+arc-consistency with
+  pairwise hidden conflict detection (`src/wfc.rs`).  Benchmarks show WFC
+  is still ~2.5× *slower* than varisat on hard UNSAT instances (e.g. FIL
+  up to 15×15: ~59s vs ~24s) because arc_consistency is O(n²) per DPLL
+  node while varisat uses watched literals + CDCL.
+
+  Pairwise hidden conflict detection is implemented and gated at n≤600:
+  for each alive pair (i,j) ∉ adj, check if adj[i] ∪ adj[j] kills all
+  alive covers of some cell c — if so, add (i,j) to adj permanently.
+  Repeat to fixpoint.  For large tori (n>600) this check is skipped
+  because O(n²) would dominate runtime.  The hard UNSAT cases (large
+  tori) are exactly the ones skipped, so the learning provides no
+  speedup on the benchmark.
+
+  The key missing piece: **cross-multiset pattern persistence** — patterns
+  learned during one solve() call should persist to future calls.  On a
+  translation-invariant torus, one learned pairwise conflict is valid at
+  all positions, so a global pattern library built from early easy cases
+  would prune hard later ones.  Currently patterns are discarded after
+  each solve() call.
 
   Piece representation: instead of enumerating explicit placements,
   define each piece type by *local rules* (e.g. I = no bends, no T/X
