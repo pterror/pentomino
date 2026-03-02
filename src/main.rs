@@ -4,9 +4,9 @@ mod placement;
 mod solver;
 mod triples;
 
-use std::io::Write;
 use clap::{Parser, Subcommand};
 use pentomino::PieceType;
+use std::io::Write;
 use triples::{all_triples, ResultsDb, TripleResult};
 
 #[derive(Parser)]
@@ -42,6 +42,16 @@ enum Command {
         /// Verify the solution after finding it
         #[arg(long, default_value_t = true)]
         verify: bool,
+        /// Write the first solution found to an SVG file at this path
+        #[arg(long)]
+        svg: Option<String>,
+        /// Disable ANSI color output
+        #[arg(long)]
+        no_color: bool,
+        /// Require all three types in the triple to appear at least once.
+        /// Without this, a 2-type sub-solution is accepted (answers a different question).
+        #[arg(long, default_value_t = true)]
+        require_all_types: bool,
     },
     /// Run all 220 triples, saving results to a JSON database.
     RunAll {
@@ -66,12 +76,18 @@ enum Command {
 
 fn parse_piece(s: &str) -> PieceType {
     match s.to_uppercase().as_str() {
-        "F" => PieceType::F, "I" => PieceType::I,
-        "L" => PieceType::L, "N" => PieceType::N,
-        "P" => PieceType::P, "T" => PieceType::T,
-        "U" => PieceType::U, "V" => PieceType::V,
-        "W" => PieceType::W, "X" => PieceType::X,
-        "Y" => PieceType::Y, "Z" => PieceType::Z,
+        "F" => PieceType::F,
+        "I" => PieceType::I,
+        "L" => PieceType::L,
+        "N" => PieceType::N,
+        "P" => PieceType::P,
+        "T" => PieceType::T,
+        "U" => PieceType::U,
+        "V" => PieceType::V,
+        "W" => PieceType::W,
+        "X" => PieceType::X,
+        "Y" => PieceType::Y,
+        "Z" => PieceType::Z,
         _ => {
             eprintln!("Unknown piece type: {}", s);
             std::process::exit(1);
@@ -85,62 +101,114 @@ fn torus_sizes(min: usize, max: usize) -> Vec<(usize, usize)> {
     let mut sizes = Vec::new();
     for area in (5..=(max * max)).step_by(5) {
         for rows in 1..=max {
-            if area % rows != 0 { continue; }
+            if area % rows != 0 {
+                continue;
+            }
             let cols = area / rows;
-            if cols < rows || cols > max { continue; }
-            if rows < min && cols < min { continue; }
+            if cols < rows || cols > max {
+                continue;
+            }
+            if rows < min && cols < min {
+                continue;
+            }
             sizes.push((rows, cols));
         }
     }
     sizes
 }
 
-fn run_triple(
-    triple: [PieceType; 3],
+struct RunOpts<'a> {
     min: usize,
     max: usize,
     verify: bool,
     verbose: bool,
-) -> TripleResult {
-    for (rows, cols) in torus_sizes(min, max) {
-        if verbose {
+    color: bool,
+    svg: Option<&'a str>,
+    require_all_types: bool,
+}
+
+fn run_triple(triple: [PieceType; 3], opts: &RunOpts) -> TripleResult {
+    for (rows, cols) in torus_sizes(opts.min, opts.max) {
+        if opts.verbose {
             print!("  {}×{} ({} pieces)... ", rows, cols, rows * cols / 5);
             std::io::stdout().flush().ok();
         }
 
-        match solver::solve(rows, cols, triple) {
+        match solver::solve(rows, cols, triple, opts.require_all_types) {
             Some(solution) => {
-                if verbose {
+                if opts.verbose {
                     println!("SAT");
-                    display::print_solution(&solution, rows, cols);
+                    if opts.color {
+                        display::print_colored(&solution, rows, cols);
+                    } else {
+                        display::print_solution(&solution, rows, cols);
+                    }
                 }
-                if verify {
+                if opts.verify {
                     solver::verify(&solution, rows, cols);
-                    if verbose { println!("  ✓ verified"); }
+                    if opts.verbose {
+                        println!("  ✓ verified");
+                    }
+                }
+                if let Some(path) = opts.svg {
+                    display::write_svg(&solution, rows, cols, path).unwrap();
                 }
                 return TripleResult::Sat { rows, cols };
             }
             None => {
-                if verbose { println!("unsat"); }
+                if opts.verbose {
+                    println!("unsat");
+                }
             }
         }
     }
-    TripleResult::Unsat { max_rows: max, max_cols: max }
+    TripleResult::Unsat {
+        max_rows: opts.max,
+        max_cols: opts.max,
+    }
 }
 
 fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Solve { a, b, c, min, max, verify } => {
+        Command::Solve {
+            a,
+            b,
+            c,
+            min,
+            max,
+            verify,
+            svg,
+            no_color,
+            require_all_types,
+        } => {
             let mut triple = [parse_piece(&a), parse_piece(&b), parse_piece(&c)];
             triple.sort();
 
-            println!("Searching for {}-{}-{} tiling (no same-type adjacency)", triple[0], triple[1], triple[2]);
-            println!("Rectangular tori, rows×cols divisible by 5, min={} max={}", min, max);
+            println!(
+                "Searching for {}-{}-{} tiling (no same-type adjacency)",
+                triple[0], triple[1], triple[2]
+            );
+            println!(
+                "Rectangular tori, rows×cols divisible by 5, min={} max={}",
+                min, max
+            );
+            if require_all_types {
+                println!("(all three types must appear)");
+            }
             println!();
 
-            let result = run_triple(triple, min, max, verify, true);
+            let opts = RunOpts {
+                min,
+                max,
+                verify,
+                verbose: true,
+                color: !no_color,
+                svg: svg.as_deref(),
+                require_all_types,
+            };
+            let result = run_triple(triple, &opts);
 
             println!();
             match result {
@@ -148,7 +216,10 @@ fn main() {
                     println!("RESULT: SAT on {}×{} torus", rows, cols);
                 }
                 TripleResult::Unsat { max_rows, max_cols } => {
-                    println!("RESULT: No solution found for tori up to {}×{}", max_rows, max_cols);
+                    println!(
+                        "RESULT: No solution found for tori up to {}×{}",
+                        max_rows, max_cols
+                    );
                     println!("(This is computational evidence, not a formal proof — see docs/proof-strategy.md)");
                 }
                 _ => unreachable!(),
@@ -162,9 +233,10 @@ fn main() {
 
             println!("Running all {} triples (max torus dim={})", total, max);
             if skip_done {
-                let done = triples.iter().filter(|t| {
-                    !matches!(results_db.get(t), None | Some(TripleResult::Unknown))
-                }).count();
+                let done = triples
+                    .iter()
+                    .filter(|t| !matches!(results_db.get(t), None | Some(TripleResult::Unknown)))
+                    .count();
                 println!("Skipping {} already-completed triples", done);
             }
             println!();
@@ -178,10 +250,28 @@ fn main() {
                     }
                 }
 
-                print!("[{}/{}] {}-{}-{}: ", i + 1, total, triple[0], triple[1], triple[2]);
+                print!(
+                    "[{}/{}] {}-{}-{}: ",
+                    i + 1,
+                    total,
+                    triple[0],
+                    triple[1],
+                    triple[2]
+                );
                 std::io::stdout().flush().ok();
 
-                let result = run_triple(*triple, 1, max, true, false);
+                let result = run_triple(
+                    *triple,
+                    &RunOpts {
+                        min: 1,
+                        max,
+                        verify: true,
+                        verbose: false,
+                        color: false,
+                        svg: None,
+                        require_all_types: true,
+                    },
+                );
 
                 match &result {
                     TripleResult::Sat { rows, cols } => {
@@ -217,8 +307,14 @@ fn main() {
 
 fn print_summary(db: &ResultsDb, triples: &[[PieceType; 3]]) {
     let total = triples.len();
-    let sat: Vec<_> = triples.iter().filter(|t| matches!(db.get(t), Some(TripleResult::Sat { .. }))).collect();
-    let unsat: Vec<_> = triples.iter().filter(|t| matches!(db.get(t), Some(TripleResult::Unsat { .. }))).collect();
+    let sat: Vec<_> = triples
+        .iter()
+        .filter(|t| matches!(db.get(t), Some(TripleResult::Sat { .. })))
+        .collect();
+    let unsat: Vec<_> = triples
+        .iter()
+        .filter(|t| matches!(db.get(t), Some(TripleResult::Unsat { .. })))
+        .collect();
     let unknown = total - sat.len() - unsat.len();
 
     println!("=== Results Summary ===");

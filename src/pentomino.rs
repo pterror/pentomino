@@ -9,12 +9,25 @@
 //!   4 orientations: T, U, V, W
 //!   8 orientations: F, L, N, P, Y, Z
 
-use std::fmt;
 use std::collections::HashSet;
+use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum PieceType {
-    F, I, L, N, P, T, U, V, W, X, Y, Z,
+    F,
+    I,
+    L,
+    N,
+    P,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
 }
 
 impl fmt::Display for PieceType {
@@ -27,10 +40,6 @@ impl PieceType {
     pub fn all() -> &'static [PieceType] {
         use PieceType::*;
         &[F, I, L, N, P, T, U, V, W, X, Y, Z]
-    }
-
-    pub fn index(self) -> usize {
-        self as usize
     }
 }
 
@@ -87,59 +96,62 @@ pub fn all_pieces() -> Vec<(PieceType, Vec<Shape>)> {
         // F: .##       X: .#.
         //    ##.           ###
         //    .#.           .#.
-        (F, &[(0,1),(0,2),(1,0),(1,1),(2,1)]),
+        (F, &[(0, 1), (0, 2), (1, 0), (1, 1), (2, 1)]),
         // I: #####
-        (I, &[(0,0),(1,0),(2,0),(3,0),(4,0)]),
+        (I, &[(0, 0), (1, 0), (2, 0), (3, 0), (4, 0)]),
         // L: #.
         //    #.
         //    #.
         //    ##
-        (L, &[(0,0),(1,0),(2,0),(3,0),(3,1)]),
+        (L, &[(0, 0), (1, 0), (2, 0), (3, 0), (3, 1)]),
         // N: #.
         //    ##
         //    .#
         //    .#
-        (N, &[(0,0),(1,0),(1,1),(2,1),(3,1)]),
+        (N, &[(0, 0), (1, 0), (1, 1), (2, 1), (3, 1)]),
         // P: ##
         //    ##
         //    #.
-        (P, &[(0,0),(0,1),(1,0),(1,1),(2,0)]),
+        (P, &[(0, 0), (0, 1), (1, 0), (1, 1), (2, 0)]),
         // T: ###
         //    .#.
         //    .#.
-        (T, &[(0,0),(0,1),(0,2),(1,1),(2,1)]),
+        (T, &[(0, 0), (0, 1), (0, 2), (1, 1), (2, 1)]),
         // U: #.#
         //    ###
-        (U, &[(0,0),(0,2),(1,0),(1,1),(1,2)]),
+        (U, &[(0, 0), (0, 2), (1, 0), (1, 1), (1, 2)]),
         // V: #..
         //    #..
         //    ###
-        (V, &[(0,0),(1,0),(2,0),(2,1),(2,2)]),
+        (V, &[(0, 0), (1, 0), (2, 0), (2, 1), (2, 2)]),
         // W: #..
         //    ##.
         //    .##
-        (W, &[(0,0),(1,0),(1,1),(2,1),(2,2)]),
+        (W, &[(0, 0), (1, 0), (1, 1), (2, 1), (2, 2)]),
         // X: .#.
         //    ###
         //    .#.
-        (X, &[(0,1),(1,0),(1,1),(1,2),(2,1)]),
+        (X, &[(0, 1), (1, 0), (1, 1), (1, 2), (2, 1)]),
         // Y: .#
         //    ##
         //    .#
         //    .#
-        (Y, &[(0,1),(1,0),(1,1),(2,1),(3,1)]),
+        (Y, &[(0, 1), (1, 0), (1, 1), (2, 1), (3, 1)]),
         // Z: ##.
         //    .#.
         //    .##
-        (Z, &[(0,0),(0,1),(1,1),(2,1),(2,2)]),
+        (Z, &[(0, 0), (0, 1), (1, 1), (2, 1), (2, 2)]),
     ];
 
-    bases.iter().map(|&(piece_type, cells)| {
-        let mut base: Shape = cells.to_vec();
-        normalize(&mut base);
-        let orientations = all_orientations(base);
-        (piece_type, orientations)
-    }).collect()
+    bases
+        .iter()
+        .map(|&(piece_type, cells)| {
+            let mut base: Shape = cells.to_vec();
+            normalize(&mut base);
+            let orientations = all_orientations(base);
+            (piece_type, orientations)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -149,7 +161,8 @@ mod tests {
     #[test]
     fn orientation_counts() {
         let pieces = all_pieces();
-        let counts: Vec<(PieceType, usize)> = pieces.iter()
+        let counts: Vec<(PieceType, usize)> = pieces
+            .iter()
             .map(|(t, orients)| (*t, orients.len()))
             .collect();
         // X: 1 (fully symmetric)
@@ -163,7 +176,11 @@ mod tests {
                 PieceType::T | PieceType::U | PieceType::V | PieceType::W | PieceType::Z => 4,
                 _ => 8,
             };
-            assert_eq!(*count, expected, "{:?} should have {} orientations", t, expected);
+            assert_eq!(
+                *count, expected,
+                "{:?} should have {} orientations",
+                t, expected
+            );
         }
     }
 

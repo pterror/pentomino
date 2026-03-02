@@ -1,7 +1,7 @@
 //! Enumerate all C(12,3) = 220 triples of pentomino types and manage results.
 
-use std::collections::HashMap;
 use crate::pentomino::PieceType;
+use std::collections::HashMap;
 
 pub fn all_triples() -> Vec<[PieceType; 3]> {
     let all = PieceType::all();
@@ -34,7 +34,9 @@ pub struct ResultsDb {
 
 impl ResultsDb {
     pub fn new() -> Self {
-        Self { results: HashMap::new() }
+        Self {
+            results: HashMap::new(),
+        }
     }
 
     pub fn load(path: &str) -> Self {
