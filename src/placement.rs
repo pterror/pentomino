@@ -47,7 +47,13 @@ pub struct Placement {
 }
 
 /// Map a plane coordinate `(plane_r, plane_c)` to a torus cell `(r, c)`.
-fn to_torus(plane_r: i32, plane_c: i32, rows: usize, cols: usize, shear: usize) -> (usize, usize) {
+pub fn to_torus(
+    plane_r: i32,
+    plane_c: i32,
+    rows: usize,
+    cols: usize,
+    shear: usize,
+) -> (usize, usize) {
     let n = plane_r.div_euclid(rows as i32);
     let r = plane_r.rem_euclid(rows as i32) as usize;
     let c = (plane_c - n * shear as i32).rem_euclid(cols as i32) as usize;

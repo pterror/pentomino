@@ -18,6 +18,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::pentomino::PieceType;
+use crate::placement::to_torus;
 use crate::solver::Solution;
 
 // ── Color palettes ────────────────────────────────────────────────────────────
@@ -80,8 +81,15 @@ fn svg_fill(color: usize) -> &'static str {
 
 /// BFS-unfold a set of torus cells belonging to one piece.
 /// Returns plane (row, col) for each cell, in the same order as `cells`.
-/// The anchor (lexicographic min of the torus cells) is placed at its own
-/// torus coordinates; all other cells are offset relative to their BFS parent.
+///
+/// The anchor (lexicographic min) is placed at its own torus coordinates.
+/// BFS walks the four plane directions (right, left, down, up) from each
+/// placed cell: the neighboring plane position is mapped back to a torus cell
+/// via `to_torus`; if that torus cell is in the piece and not yet placed, it
+/// gets assigned the neighboring plane position.
+///
+/// This correctly handles oblique tori where plane-adjacent cells do NOT have
+/// the same torus-adjacency as the four-neighbor `neighbours()` relation.
 fn unfold_piece(
     cells: &[(usize, usize)],
     rows: usize,
@@ -96,46 +104,15 @@ fn unfold_piece(
     plane_of.insert(anchor, (anchor.0 as i32, anchor.1 as i32));
     queue.push_back(anchor);
 
-    let shear = shear % cols.max(1);
+    while let Some(tcell) = queue.pop_front() {
+        let (pr, pc) = plane_of[&tcell];
 
-    while let Some((tr, tc)) = queue.pop_front() {
-        let (pr, pc) = plane_of[&(tr, tc)];
-
-        // For each torus neighbour that belongs to this piece, assign a plane
-        // position by stepping in the natural plane direction.
-        let neighbors: [(usize, usize, i32, i32); 4] = [
-            // right
-            (tr, (tc + 1) % cols, 0, 1),
-            // left
-            (tr, (tc + cols - 1) % cols, 0, -1),
-            // down (crossing bottom wraps col by +shear)
-            (
-                (tr + 1) % rows,
-                if tr + 1 < rows {
-                    tc
-                } else {
-                    (tc + shear) % cols
-                },
-                1,
-                0,
-            ),
-            // up (crossing top wraps col by -shear)
-            (
-                (tr + rows - 1) % rows,
-                if tr > 0 {
-                    tc
-                } else {
-                    (tc + cols - shear) % cols
-                },
-                -1,
-                0,
-            ),
-        ];
-
-        for (ntr, ntc, dr, dc) in neighbors {
-            if cell_set.contains(&(ntr, ntc)) && !plane_of.contains_key(&(ntr, ntc)) {
-                plane_of.insert((ntr, ntc), (pr + dr, pc + dc));
-                queue.push_back((ntr, ntc));
+        for (dr, dc) in [(0i32, 1i32), (0, -1), (1, 0), (-1, 0)] {
+            let nplane = (pr + dr, pc + dc);
+            let ntorus = to_torus(nplane.0, nplane.1, rows, cols, shear);
+            if cell_set.contains(&ntorus) && !plane_of.contains_key(&ntorus) {
+                plane_of.insert(ntorus, nplane);
+                queue.push_back(ntorus);
             }
         }
     }
