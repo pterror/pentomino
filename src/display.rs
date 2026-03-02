@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 
 use crate::pentomino::PieceType;
+use crate::placement::to_torus;
 use crate::solver::Solution;
 
 // ── Color palettes ────────────────────────────────────────────────────────────
@@ -68,11 +69,16 @@ fn svg_fill(color: usize) -> &'static str {
 
 // ── Plane display grid ────────────────────────────────────────────────────────
 //
-// Each piece's plane coordinates are taken directly from the placement's
-// original plane_cells (stored during enumeration, before torus wrapping).
-// This correctly shows the actual piece shape on oblique tori where BFS
-// unfolding can fail (e.g. on 1-row tori "down" and "left" map to the same
-// torus cell, causing BFS to flatten all pieces to horizontal strips).
+// Each piece's plane coordinates are taken from its stored plane_cells
+// (recorded during enumeration, before torus wrapping), then translated so
+// the piece's minimum torus cell sits at its own torus coordinates.
+//
+// This gives two guarantees:
+//   1. The displayed shape is always the true pentomino shape (no BFS
+//      flattening on oblique tori where "down" == "left" in torus space).
+//   2. Pieces that are adjacent on the torus are also adjacent in the display
+//      (no gaps between pieces), because all pieces are anchored relative to
+//      the same torus coordinate system.
 
 struct CellInfo {
     piece_id: usize, // unique per piece placement — used for border detection
@@ -80,12 +86,18 @@ struct CellInfo {
     ty: PieceType,
 }
 
-/// Build a plane display grid using the stored plane_cells from each placement.
+/// Build a plane display grid.
 /// Returns the grid (row-major) sized to the bounding box of all cells.
-fn plane_display(sol: &Solution, rows: usize, cols: usize) -> Vec<Vec<Option<CellInfo>>> {
-    // Collect color/type for each piece_id from the torus grid.
+fn plane_display(
+    sol: &Solution,
+    rows: usize,
+    cols: usize,
+    shear: usize,
+) -> Vec<Vec<Option<CellInfo>>> {
+    // Collect color/type and min torus cell for each piece_id from the torus grid.
     let mut piece_color: HashMap<usize, usize> = HashMap::new();
     let mut piece_type_map: HashMap<usize, PieceType> = HashMap::new();
+    let mut piece_min_torus: HashMap<usize, (usize, usize)> = HashMap::new();
     for tr in 0..rows {
         for tc in 0..cols {
             if let Some(pid) = sol.grid_piece[tr][tc] {
@@ -95,17 +107,36 @@ fn plane_display(sol: &Solution, rows: usize, cols: usize) -> Vec<Vec<Option<Cel
                 piece_type_map
                     .entry(pid)
                     .or_insert_with(|| sol.grid_type[tr][tc].unwrap_or(PieceType::X));
+                let e = piece_min_torus.entry(pid).or_insert((tr, tc));
+                if (tr, tc) < *e {
+                    *e = (tr, tc);
+                }
             }
         }
     }
 
-    // Use stored plane_cells directly — no BFS unfolding needed.
+    // For each piece, shift its stored plane_cells so that the cell whose
+    // torus position equals the piece's min torus cell is placed at its torus
+    // coordinates.  This anchors all pieces consistently in the same coordinate
+    // system, so torus-adjacent pieces are also plane-adjacent in the display.
     let mut all: Vec<(i32, i32, usize, usize, PieceType)> = Vec::new();
     for (&pid, plane_cells) in &sol.piece_plane_cells {
         let color = piece_color.get(&pid).copied().unwrap_or(0);
         let ty = piece_type_map.get(&pid).copied().unwrap_or(PieceType::X);
+        let (tr_min, tc_min) = piece_min_torus.get(&pid).copied().unwrap_or((0, 0));
+
+        // Find the stored plane_cell that maps to (tr_min, tc_min) on the torus.
+        let anchor = plane_cells
+            .iter()
+            .find(|&&(pr, pc)| to_torus(pr, pc, rows, cols, shear) == (tr_min, tc_min))
+            .copied()
+            .unwrap_or(plane_cells[0]);
+
+        let dr = tr_min as i32 - anchor.0;
+        let dc = tc_min as i32 - anchor.1;
+
         for &(pr, pc) in plane_cells {
-            all.push((pr, pc, pid, color, ty));
+            all.push((pr + dr, pc + dc, pid, color, ty));
         }
     }
 
@@ -162,16 +193,20 @@ fn type_char(t: Option<PieceType>) -> char {
 // ── ANSI 256-color terminal output ────────────────────────────────────────────
 
 /// Print the tiling: one colored space per cell, one terminal line per row.
-/// Shows the torus grid directly (rows×cols): each cell colored by its piece.
-/// This always produces a tight, gap-free display for any torus geometry.
-pub fn print_colored(sol: &Solution, rows: usize, cols: usize, _shear: usize) {
+/// Pieces are displayed in their true plane shapes with correct relative
+/// positions (no gaps between adjacent pieces).
+pub fn print_colored(sol: &Solution, rows: usize, cols: usize, shear: usize) {
+    let grid = plane_display(sol, rows, cols, shear);
+    if grid.is_empty() {
+        return;
+    }
     println!();
-    for r in 0..rows {
+    for row in &grid {
         print!("  ");
-        for c in 0..cols {
-            match sol.grid_color[r][c] {
-                Some(color) => {
-                    let bg = ansi_bg(color);
+        for cell in row {
+            match cell {
+                Some(cell) => {
+                    let bg = ansi_bg(cell.color);
                     print!("\x1b[48;5;{bg}m \x1b[0m");
                 }
                 None => print!(" "),
@@ -195,7 +230,7 @@ pub fn write_svg(
     shear: usize,
     path: &str,
 ) -> std::io::Result<()> {
-    let grid = plane_display(sol, rows, cols);
+    let grid = plane_display(sol, rows, cols, shear);
     if grid.is_empty() {
         return Ok(());
     }
