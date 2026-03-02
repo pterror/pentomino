@@ -77,6 +77,11 @@ enum Command {
     ///
     /// Counts by size: 1→12, 2→78, 3→364, 4→1365, …
     /// Default size=3 covers the classic "all triples" search.
+    ///
+    /// Search order: BFS over torus sizes — all multisets are tried at each
+    /// (rows, cols, shear) before moving to larger tori.  This reports all
+    /// small solutions first and avoids spending time on hard instances when
+    /// easier ones remain.
     RunAll {
         /// Maximum torus dimension to try per multiset
         #[arg(long, default_value_t = 15)]
@@ -90,6 +95,9 @@ enum Command {
         /// Number of colors in each multiset (1=singles, 2=pairs, 3=triples, …)
         #[arg(long, default_value_t = 3)]
         size: usize,
+        /// Save individual solution SVGs here and stitch a grid.svg in this directory
+        #[arg(long)]
+        svg_dir: Option<String>,
     },
     /// Print a summary of the results database.
     Summary {
@@ -249,7 +257,7 @@ fn run_multiset(types: &[PieceType], opts: &RunOpts) -> TripleResult {
                     if let Some(path) = opts.svg {
                         display::write_svg(&solution, rows, cols, shear, path).unwrap();
                     }
-                    return TripleResult::Sat { rows, cols };
+                    return TripleResult::Sat { rows, cols, shear };
                 }
                 None => {
                     if opts.verbose {
@@ -336,8 +344,12 @@ fn main() {
 
             println!();
             match result {
-                TripleResult::Sat { rows, cols } => {
-                    println!("RESULT: SAT on {}×{} torus", rows, cols);
+                TripleResult::Sat { rows, cols, shear } => {
+                    if shear > 0 {
+                        println!("RESULT: SAT on {}×{} torus (shear={})", rows, cols, shear);
+                    } else {
+                        println!("RESULT: SAT on {}×{} torus", rows, cols);
+                    }
                 }
                 TripleResult::Unsat { max_rows, max_cols } => {
                     if let Some((r, c)) = exact {
@@ -359,6 +371,7 @@ fn main() {
             db,
             skip_done,
             size,
+            svg_dir,
         } => {
             let mut results_db = ResultsDb::load(&db);
 
@@ -366,7 +379,7 @@ fn main() {
             let total = multisets.len();
 
             println!(
-                "Running {} {}-multisets (max torus dim={})",
+                "Running {} {}-multisets (max torus dim={}, BFS over sizes)",
                 total, size, max
             );
             if skip_done {
@@ -390,47 +403,160 @@ fn main() {
             )
             .ok();
 
-            for (i, types) in multisets.iter().enumerate() {
-                if skip_done {
-                    if let Some(r) = results_db.get_multiset(types) {
-                        if !matches!(r, TripleResult::Unknown) {
-                            continue;
+            if let Some(dir) = &svg_dir {
+                std::fs::create_dir_all(dir).ok();
+            }
+
+            // Ctrl+C handler: set a flag so we can save partial results on exit.
+            let interrupted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            {
+                let flag = interrupted.clone();
+                ctrlc::set_handler(move || {
+                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                })
+                .ok();
+            }
+
+            // Which multisets are still pending (not yet solved or explicitly skipped)?
+            // Index into `multisets`.
+            let mut pending: Vec<usize> = (0..multisets.len())
+                .filter(|&i| {
+                    if skip_done {
+                        !matches!(
+                            results_db.get_multiset(&multisets[i]),
+                            Some(TripleResult::Sat { .. }) | Some(TripleResult::Unsat { .. })
+                        )
+                    } else {
+                        true
+                    }
+                })
+                .collect();
+
+            // SVG panels accumulated during the run (label, svg_string).
+            let mut svg_panels: Vec<(String, String)> = Vec::new();
+
+            // Pre-populate svg_panels from already-solved SAT results in the db.
+            if svg_dir.is_some() {
+                for types in &multisets {
+                    if let Some(TripleResult::Sat { rows, cols, shear }) =
+                        results_db.get_multiset(types)
+                    {
+                        let (rows, cols, shear) = (*rows, *cols, *shear);
+                        let label = multiset_label(types);
+                        let size_str = if shear > 0 {
+                            format!("{}×{} shear={}", rows, cols, shear)
+                        } else {
+                            format!("{}×{}", rows, cols)
+                        };
+                        // Re-solve to get the solution for SVG rendering.
+                        if let Some(sol) = solver::solve(rows, cols, shear, types, true) {
+                            let svg_label = format!("{label} ({size_str}) — one copy of each tile");
+                            if let Some(svg) =
+                                display::build_svg(&sol, rows, cols, shear, &svg_label)
+                            {
+                                svg_panels.push((label, svg));
+                            }
                         }
                     }
                 }
+            }
 
-                print!("[{}/{}] {}: ", i + 1, total, multiset_label(types));
-                std::io::stdout().flush().ok();
+            // BFS over torus sizes: try all pending multisets at each (rows, cols, shear)
+            // before moving to larger tori.
+            'outer: for (rows, cols) in torus_sizes(1, max) {
+                if pending.is_empty() {
+                    break;
+                }
+                for shear in 0..=cols / 2 {
+                    if pending.is_empty() {
+                        break 'outer;
+                    }
+                    if interrupted.load(std::sync::atomic::Ordering::SeqCst) {
+                        println!("\nInterrupted — saving partial results.");
+                        break 'outer;
+                    }
 
-                let result = run_multiset(
+                    let mut newly_solved: Vec<usize> = Vec::new();
+                    for &i in &pending {
+                        let types = &multisets[i];
+                        let label = multiset_label(types);
+
+                        // Skip if this exact (rows, cols, shear) was already tried.
+                        if results_db.get_config(types, rows, cols, shear).is_some() {
+                            if results_db.get_config(types, rows, cols, shear) == Some(true) {
+                                newly_solved.push(i);
+                            }
+                            continue;
+                        }
+
+                        match solver::solve(rows, cols, shear, types, true) {
+                            Some(solution) => {
+                                let size_str = if shear > 0 {
+                                    format!("{}×{} shear={}", rows, cols, shear)
+                                } else {
+                                    format!("{}×{}", rows, cols)
+                                };
+                                println!("[{}/{}] {label}: SAT ({size_str})", i + 1, total);
+
+                                solver::verify(&solution, rows, cols, shear);
+
+                                if let Some(dir) = &svg_dir {
+                                    let svg_label =
+                                        format!("{label} ({size_str}) — one copy of each tile");
+                                    if let Some(svg) =
+                                        display::build_svg(&solution, rows, cols, shear, &svg_label)
+                                    {
+                                        let svg_path = format!("{dir}/{label}.svg");
+                                        std::fs::write(&svg_path, &svg).ok();
+                                        svg_panels.push((label, svg));
+                                    }
+                                }
+
+                                results_db.set_config(types, rows, cols, shear, true);
+                                results_db
+                                    .set_multiset(types, TripleResult::Sat { rows, cols, shear });
+                                results_db.save(&db);
+                                newly_solved.push(i);
+                            }
+                            None => {
+                                results_db.set_config(types, rows, cols, shear, false);
+                            }
+                        }
+                    }
+
+                    pending.retain(|i| !newly_solved.contains(i));
+                }
+            }
+
+            // Any still-pending multisets exhausted the search space.
+            for &i in &pending {
+                let types = &multisets[i];
+                println!(
+                    "[{}/{}] {}: unsat (no solution ≤ {}×{})",
+                    i + 1,
+                    total,
+                    multiset_label(types),
+                    max,
+                    max
+                );
+                results_db.set_multiset(
                     types,
-                    &RunOpts {
-                        exact: None,
-                        min: 1,
-                        max,
-                        shear: usize::MAX, // search all shears 0..=cols/2
-                        verify: true,
-                        verbose: false,
-                        color: false,
-                        svg: None,
-                        dump_graph: None,
-                        treewidth: false,
-                        require_all_types: true,
+                    TripleResult::Unsat {
+                        max_rows: max,
+                        max_cols: max,
                     },
                 );
-
-                match &result {
-                    TripleResult::Sat { rows, cols } => {
-                        println!("SAT ({}×{})", rows, cols);
-                    }
-                    TripleResult::Unsat { .. } => {
-                        println!("unsat (no solution ≤ {}×{})", max, max);
-                    }
-                    _ => unreachable!(),
-                }
-
-                results_db.set_multiset(types, result);
+            }
+            if !pending.is_empty() {
                 results_db.save(&db);
+            }
+
+            // Stitch grid SVG.
+            if let Some(dir) = &svg_dir {
+                if !svg_panels.is_empty() {
+                    let ncols = (svg_panels.len() as f64).sqrt().ceil() as usize;
+                    display::write_svg_grid(&svg_panels, ncols, &format!("{dir}/grid.svg")).ok();
+                }
             }
 
             println!();
@@ -471,8 +597,12 @@ fn print_summary(db: &ResultsDb, multisets: &[Vec<PieceType>]) {
     if !sat.is_empty() {
         println!("\nSAT:");
         for t in &sat {
-            if let Some(TripleResult::Sat { rows, cols }) = db.get_multiset(t) {
-                println!("  {}: {}×{}", multiset_label(t), rows, cols);
+            if let Some(TripleResult::Sat { rows, cols, shear }) = db.get_multiset(t) {
+                if *shear > 0 {
+                    println!("  {}: {}×{} shear={}", multiset_label(t), rows, cols, shear);
+                } else {
+                    println!("  {}: {}×{}", multiset_label(t), rows, cols);
+                }
             }
         }
     }

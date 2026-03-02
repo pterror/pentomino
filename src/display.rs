@@ -223,16 +223,18 @@ const CELL: f64 = 48.0; // px per cell
 const MARGIN: f64 = 24.0; // px outer margin
 const THICK: f64 = 3.0; // stroke-width for piece boundaries
 
-pub fn write_svg(
+/// Build the SVG string for a single solution panel.
+/// Returns `None` if the solution has no cells to display.
+pub fn build_svg(
     sol: &Solution,
     rows: usize,
     cols: usize,
     shear: usize,
-    path: &str,
-) -> std::io::Result<()> {
+    label: &str,
+) -> Option<String> {
     let grid = plane_display(sol, rows, cols, shear);
     if grid.is_empty() {
-        return Ok(());
+        return None;
     }
     let disp_rows = grid.len();
     let disp_cols = grid[0].len();
@@ -311,15 +313,7 @@ pub fn write_svg(
         }
     }
 
-    // ── Torus annotation ──────────────────────────────────────────────────────
-    let label = if shear > 0 {
-        format!(
-            "{}×{} torus, shear={} — one copy of each tile",
-            rows, cols, shear
-        )
-    } else {
-        format!("{}×{} torus — one copy of each tile", rows, cols)
-    };
+    // ── Label ─────────────────────────────────────────────────────────────────
     let lx = w / 2.0;
     let ly = h - MARGIN / 2.0;
     out += &format!(
@@ -328,8 +322,124 @@ pub fn write_svg(
     );
 
     out += "</svg>\n";
+    Some(out)
+}
 
-    std::fs::write(path, out)?;
-    println!("  SVG written to {path}");
+pub fn write_svg(
+    sol: &Solution,
+    rows: usize,
+    cols: usize,
+    shear: usize,
+    path: &str,
+) -> std::io::Result<()> {
+    let label = if shear > 0 {
+        format!(
+            "{}×{} torus, shear={} — one copy of each tile",
+            rows, cols, shear
+        )
+    } else {
+        format!("{}×{} torus — one copy of each tile", rows, cols)
+    };
+    if let Some(svg) = build_svg(sol, rows, cols, shear, &label) {
+        std::fs::write(path, svg)?;
+        println!("  SVG written to {path}");
+    }
+    Ok(())
+}
+
+/// Write a grid of solution panels to a single SVG file.
+///
+/// `panels` is a list of (label, svg_string) pairs where each svg_string
+/// is the output of `build_svg`.  Panels are arranged in a grid with the
+/// given number of columns.  The panel SVGs are embedded as nested `<svg>`
+/// elements, each scaled to fit a fixed cell size.
+pub fn write_svg_grid(
+    panels: &[(String, String)],
+    grid_cols: usize,
+    path: &str,
+) -> std::io::Result<()> {
+    if panels.is_empty() {
+        return Ok(());
+    }
+
+    // Fixed cell size for each panel in the grid.
+    const PANEL_W: f64 = 320.0;
+    const PANEL_H: f64 = 320.0;
+    const GAP: f64 = 8.0;
+    const LABEL_H: f64 = 24.0;
+    const GRID_MARGIN: f64 = 16.0;
+
+    let ncols = grid_cols.max(1);
+    let nrows = panels.len().div_ceil(ncols);
+
+    let total_w = GRID_MARGIN * 2.0 + ncols as f64 * PANEL_W + (ncols - 1) as f64 * GAP;
+    let total_h = GRID_MARGIN * 2.0 + nrows as f64 * (PANEL_H + LABEL_H) + (nrows - 1) as f64 * GAP;
+
+    let mut out = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="{total_w:.0}" height="{total_h:.0}">
+  <rect width="{total_w:.0}" height="{total_h:.0}" fill="#0d0d1a"/>
+"##
+    );
+
+    for (i, (label, svg_content)) in panels.iter().enumerate() {
+        let col = i % ncols;
+        let row = i / ncols;
+        let x = GRID_MARGIN + col as f64 * (PANEL_W + GAP);
+        let y = GRID_MARGIN + row as f64 * (PANEL_H + LABEL_H + GAP);
+
+        // Extract width/height from the inner SVG to compute scale.
+        let inner_w: f64 = svg_content
+            .lines()
+            .find(|l| l.contains("width="))
+            .and_then(|l| {
+                let s = l.split("width=\"").nth(1)?;
+                s.split('"').next()?.parse().ok()
+            })
+            .unwrap_or(PANEL_W);
+        let inner_h: f64 = svg_content
+            .lines()
+            .find(|l| l.contains("height="))
+            .and_then(|l| {
+                let s = l.split("height=\"").nth(1)?;
+                s.split('"').next()?.parse().ok()
+            })
+            .unwrap_or(PANEL_H);
+
+        let scale_x = PANEL_W / inner_w;
+        let scale_y = PANEL_H / inner_h;
+        let scale = scale_x.min(scale_y);
+        let px = x + (PANEL_W - inner_w * scale) / 2.0;
+        let py = y;
+
+        // Strip the XML declaration and outer <svg> wrapper; embed as a nested <svg>.
+        let inner_body: String = svg_content
+            .lines()
+            .filter(|l| !l.starts_with("<?xml") && !l.starts_with("<svg") && *l != "</svg>")
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        out += &format!(
+            "  <svg x=\"{px:.1}\" y=\"{py:.1}\" width=\"{:.1}\" height=\"{:.1}\" \
+             viewBox=\"0 0 {inner_w:.1} {inner_h:.1}\">\n",
+            inner_w * scale,
+            inner_h * scale,
+        );
+        out += &inner_body;
+        out += "\n  </svg>\n";
+
+        // Label below the panel.
+        let lx = x + PANEL_W / 2.0;
+        let ly = y + PANEL_H + LABEL_H * 0.75;
+        out += &format!(
+            "  <text x=\"{lx:.1}\" y=\"{ly:.1}\" font-family=\"monospace\" font-size=\"13\" \
+             fill=\"#ccc\" text-anchor=\"middle\">{label}</text>\n"
+        );
+    }
+
+    out += "</svg>\n";
+    std::fs::write(path, &out)?;
+    println!("Grid SVG ({} panels) written to {path}", panels.len());
     Ok(())
 }

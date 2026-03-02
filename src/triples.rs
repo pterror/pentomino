@@ -37,7 +37,12 @@ fn multisets_rec(
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum TripleResult {
     /// Solution found on a torus of this size.
-    Sat { rows: usize, cols: usize },
+    Sat {
+        rows: usize,
+        cols: usize,
+        #[serde(default)]
+        shear: usize,
+    },
     /// No solution found for all tori up to this bound (not a proof).
     Unsat { max_rows: usize, max_cols: usize },
     /// Still being searched.
@@ -46,13 +51,20 @@ pub enum TripleResult {
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ResultsDb {
+    /// Overall result per multiset (SAT/Unsat/Unknown).
     pub results: HashMap<String, TripleResult>,
+    /// Per-config results: key = "label|{rows}x{cols}s{shear}".
+    /// `true` = SAT found at that exact config, `false` = UNSAT at that config.
+    /// Used to skip already-tried (rows, cols, shear) triples when resuming.
+    #[serde(default)]
+    pub tried_configs: HashMap<String, bool>,
 }
 
 impl ResultsDb {
     pub fn new() -> Self {
         Self {
             results: HashMap::new(),
+            tried_configs: HashMap::new(),
         }
     }
 
@@ -77,11 +89,42 @@ impl ResultsDb {
             .join("-")
     }
 
+    /// Key for a specific (multiset, rows, cols, shear) configuration.
+    pub fn config_key(types: &[PieceType], rows: usize, cols: usize, shear: usize) -> String {
+        format!("{}|{}x{}s{}", Self::multiset_key(types), rows, cols, shear)
+    }
+
     pub fn get_multiset(&self, types: &[PieceType]) -> Option<&TripleResult> {
         self.results.get(&Self::multiset_key(types))
     }
 
     pub fn set_multiset(&mut self, types: &[PieceType], result: TripleResult) {
         self.results.insert(Self::multiset_key(types), result);
+    }
+
+    /// Record that (types, rows, cols, shear) was tried. `sat` = whether a solution was found.
+    pub fn set_config(
+        &mut self,
+        types: &[PieceType],
+        rows: usize,
+        cols: usize,
+        shear: usize,
+        sat: bool,
+    ) {
+        self.tried_configs
+            .insert(Self::config_key(types, rows, cols, shear), sat);
+    }
+
+    /// Returns `Some(sat)` if this config was already tried, `None` if not.
+    pub fn get_config(
+        &self,
+        types: &[PieceType],
+        rows: usize,
+        cols: usize,
+        shear: usize,
+    ) -> Option<bool> {
+        self.tried_configs
+            .get(&Self::config_key(types, rows, cols, shear))
+            .copied()
     }
 }
