@@ -306,6 +306,87 @@ pub fn solve(
         }
     }
 
+    // ── Constraint 4: Translational symmetry breaking ─────────────────────
+    // Any valid tiling can be translated so color 0 covers cell (0,0).
+    // Force cell (0,0) to be covered by color 0 by forbidding all other colors
+    // from covering it.
+    for &var_idx in &cell_to_vars[0] {
+        let (color, _) = &global[var_idx];
+        if *color != 0 {
+            solver.add_clause(&[neg(var_idx)]);
+        }
+    }
+
+    // ── Constraint 5: Color permutation symmetry breaking ─────────────────
+    // For each group of same-type colors, require the lex-min cell covered by
+    // color i ≤ lex-min cell covered by color j for all same-type i < j.
+    //
+    // Encoding: for each same-type pair (ci < cj), for each placement q of cj:
+    //   ¬x_{cj,q}  ∨  (∨ x_{ci,p} for all p of ci where min_cell(p) ≤ min_cell(q))
+    //
+    // Correctness: if the clause fires for q with the smallest min_cell among
+    // cj's active placements, it forces ci to have an active placement with
+    // min_cell ≤ min_cell(cj).  Completeness: any solution with min_cell(ci) ≤
+    // min_cell(cj) satisfies all clauses.
+    {
+        let cell_idx = |r: usize, c: usize| r * cols + c;
+
+        // Group color indices by piece type.
+        let mut type_groups: HashMap<PieceType, Vec<usize>> = HashMap::new();
+        for (color, &pt) in types.iter().enumerate() {
+            type_groups.entry(pt).or_default().push(color);
+        }
+
+        for group in type_groups.values() {
+            if group.len() < 2 {
+                continue;
+            }
+            for a in 0..group.len() {
+                for b in a + 1..group.len() {
+                    let ci = group[a];
+                    let cj = group[b];
+                    let start_i = color_start[ci];
+                    let len_i = color_len[ci];
+                    let start_j = color_start[cj];
+                    let len_j = color_len[cj];
+
+                    // Precompute min cell index for each placement of ci.
+                    let min_cells_i: Vec<usize> = (start_i..start_i + len_i)
+                        .map(|p| {
+                            global[p]
+                                .1
+                                .cells
+                                .iter()
+                                .map(|&(r, c)| cell_idx(r, c))
+                                .min()
+                                .unwrap()
+                        })
+                        .collect();
+
+                    for qk in 0..len_j {
+                        let q_global = start_j + qk;
+                        let min_q = global[q_global]
+                            .1
+                            .cells
+                            .iter()
+                            .map(|&(r, c)| cell_idx(r, c))
+                            .min()
+                            .unwrap();
+
+                        // ¬x_{cj,q} ∨ (∨ x_{ci,p} for min_cell(p) ≤ min_q)
+                        let mut clause = vec![neg(q_global)];
+                        for (pk, &min_p) in min_cells_i.iter().enumerate() {
+                            if min_p <= min_q {
+                                clause.push(pos(start_i + pk));
+                            }
+                        }
+                        solver.add_clause(&clause);
+                    }
+                }
+            }
+        }
+    }
+
     // ── Solve ──────────────────────────────────────────────────────────────
     match solver.solve().unwrap() {
         false => None,

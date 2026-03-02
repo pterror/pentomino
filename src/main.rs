@@ -408,7 +408,7 @@ fn main() {
                         exact: None,
                         min: 1,
                         max,
-                        shear: 0,
+                        shear: usize::MAX, // search all shears 0..=cols/2
                         verify: true,
                         verbose: false,
                         color: false,
