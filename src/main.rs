@@ -59,6 +59,9 @@ enum Command {
         /// Write the first solution found to an SVG file at this path
         #[arg(long)]
         svg: Option<String>,
+        /// Render 8 dimmed tiled copies around the fundamental domain in the SVG
+        #[arg(long, default_value_t = false)]
+        tile_copies: bool,
         /// Write the placement conflict graph in PACE .gr format (for treewidth analysis)
         #[arg(long)]
         dump_graph: Option<String>,
@@ -98,6 +101,9 @@ enum Command {
         /// Save individual solution SVGs here and stitch a grid.svg in this directory
         #[arg(long)]
         svg_dir: Option<String>,
+        /// Render 8 dimmed tiled copies around the fundamental domain in each SVG
+        #[arg(long, default_value_t = false)]
+        tile_copies: bool,
     },
     /// Print a summary of the results database.
     Summary {
@@ -170,6 +176,7 @@ struct RunOpts<'a> {
     verbose: bool,
     color: bool,
     svg: Option<&'a str>,
+    tile_copies: bool,
     /// If Some, write the conflict graph for the first torus tried to this path.
     dump_graph: Option<&'a str>,
     /// Print treewidth upper bound for each (rows, cols, shear) tried.
@@ -255,7 +262,8 @@ fn run_multiset(types: &[PieceType], opts: &RunOpts) -> TripleResult {
                         }
                     }
                     if let Some(path) = opts.svg {
-                        display::write_svg(&solution, rows, cols, shear, path).unwrap();
+                        display::write_svg(&solution, rows, cols, shear, path, opts.tile_copies)
+                            .unwrap();
                     }
                     return TripleResult::Sat {
                         rows,
@@ -345,6 +353,7 @@ fn main() {
             shear,
             verify,
             svg,
+            tile_copies,
             dump_graph,
             treewidth,
             no_color,
@@ -387,6 +396,7 @@ fn main() {
                 verbose: true,
                 color: !no_color,
                 svg: svg.as_deref(),
+                tile_copies,
                 dump_graph: dump_graph.as_deref(),
                 treewidth,
                 require_all_types,
@@ -425,6 +435,7 @@ fn main() {
             skip_done,
             size,
             svg_dir,
+            tile_copies,
         } => {
             let mut results_db = ResultsDb::load(&db);
 
@@ -524,7 +535,7 @@ fn main() {
                         };
                         if let Some(sol) = sol {
                             if let Some(svg) =
-                                display::build_svg(&sol, rows, cols, shear, &svg_label)
+                                display::build_svg(&sol, rows, cols, shear, &svg_label, tile_copies)
                             {
                                 svg_panels.push((label, svg));
                             }
@@ -588,9 +599,14 @@ fn main() {
                                 if let Some(dir) = &svg_dir {
                                     let svg_label =
                                         format!("{label} ({size_str}) — one copy of each tile");
-                                    if let Some(svg) =
-                                        display::build_svg(&solution, rows, cols, shear, &svg_label)
-                                    {
+                                    if let Some(svg) = display::build_svg(
+                                        &solution,
+                                        rows,
+                                        cols,
+                                        shear,
+                                        &svg_label,
+                                        tile_copies,
+                                    ) {
                                         let svg_path = format!("{dir}/{label}.svg");
                                         std::fs::write(&svg_path, &svg).ok();
                                         svg_panels.push((label, svg));

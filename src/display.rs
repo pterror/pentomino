@@ -224,6 +224,11 @@ const MARGIN: f64 = 24.0; // px outer margin
 const THICK: f64 = 3.0; // stroke-width for piece boundaries
 
 /// Build the SVG string for a single solution panel.
+///
+/// If `tile_copies` is true, renders a 3×3 neighbourhood of torus copies
+/// around the fundamental domain (dimmed at 28% opacity) to show how the
+/// tiling extends across the plane.
+///
 /// Returns `None` if the solution has no cells to display.
 pub fn build_svg(
     sol: &Solution,
@@ -231,6 +236,7 @@ pub fn build_svg(
     cols: usize,
     shear: usize,
     label: &str,
+    tile_copies: bool,
 ) -> Option<String> {
     let grid = plane_display(sol, rows, cols, shear);
     if grid.is_empty() {
@@ -241,8 +247,46 @@ pub fn build_svg(
 
     let id = |r: usize, c: usize| grid[r][c].as_ref().map_or(usize::MAX, |x| x.piece_id);
 
-    let w = MARGIN * 2.0 + CELL * disp_cols as f64;
-    let h = MARGIN * 2.0 + CELL * disp_rows as f64;
+    // Flat list of non-empty cells: (disp_r, disp_c, color).
+    // Used to render the dimmed tiled copies without re-running plane_display.
+    let raw_cells: Vec<(i32, i32, usize)> = grid
+        .iter()
+        .enumerate()
+        .flat_map(|(r, row)| {
+            row.iter()
+                .enumerate()
+                .filter_map(move |(c, cell)| cell.as_ref().map(|ci| (r as i32, c as i32, ci.color)))
+        })
+        .collect();
+
+    // The 8 surrounding copy offsets in (disp_row_delta, disp_col_delta) units.
+    // Lattice vectors: e1 = (rows, shear), e2 = (0, cols).
+    // Copy (m, n) is at delta = m*e1 + n*e2.
+    let copy_offsets: Vec<(i32, i32)> = if tile_copies {
+        (-1..=1_i32)
+            .flat_map(|m| (-1..=1_i32).map(move |n| (m, n)))
+            .filter(|&(m, n)| m != 0 || n != 0)
+            .map(|(m, n)| (m * rows as i32, m * shear as i32 + n * cols as i32))
+            .collect()
+    } else {
+        vec![]
+    };
+
+    // Compute global bounds so the main copy and all neighbours fit.
+    let min_dr = copy_offsets.iter().map(|&(dr, _)| dr).min().unwrap_or(0);
+    let min_dc = copy_offsets.iter().map(|&(_, dc)| dc).min().unwrap_or(0);
+    let max_dr = copy_offsets.iter().map(|&(dr, _)| dr).max().unwrap_or(0);
+    let max_dc = copy_offsets.iter().map(|&(_, dc)| dc).max().unwrap_or(0);
+
+    let total_rows = disp_rows as i32 + max_dr - min_dr;
+    let total_cols = disp_cols as i32 + max_dc - min_dc;
+
+    // Pixel origin of the main (fundamental domain) copy.
+    let origin_r = -min_dr; // offset in display-cell units
+    let origin_c = -min_dc;
+
+    let w = MARGIN * 2.0 + CELL * total_cols as f64;
+    let h = MARGIN * 2.0 + CELL * total_rows as f64;
 
     let mut out = format!(
         r##"<?xml version="1.0" encoding="UTF-8"?>
@@ -251,12 +295,26 @@ pub fn build_svg(
 "##
     );
 
-    // ── Filled cells ──────────────────────────────────────────────────────────
+    // ── Dimmed tiled copies ───────────────────────────────────────────────────
+    for &(dr, dc) in &copy_offsets {
+        out += "  <g opacity=\"0.28\">\n";
+        for &(r, c, color) in &raw_cells {
+            let x = MARGIN + (origin_c + dc + c) as f64 * CELL;
+            let y = MARGIN + (origin_r + dr + r) as f64 * CELL;
+            let fill = svg_fill(color);
+            out += &format!(
+                "    <rect x=\"{x:.1}\" y=\"{y:.1}\" width=\"{CELL}\" height=\"{CELL}\" fill=\"{fill}\"/>\n"
+            );
+        }
+        out += "  </g>\n";
+    }
+
+    // ── Filled cells (main copy) ──────────────────────────────────────────────
     for (r, row) in grid.iter().enumerate() {
         for (c, cell) in row.iter().enumerate() {
             if let Some(cell) = cell {
-                let x = MARGIN + c as f64 * CELL;
-                let y = MARGIN + r as f64 * CELL;
+                let x = MARGIN + (origin_c + c as i32) as f64 * CELL;
+                let y = MARGIN + (origin_r + r as i32) as f64 * CELL;
                 let fill = svg_fill(cell.color);
                 out += &format!(
                     "  <rect x=\"{x:.1}\" y=\"{y:.1}\" width=\"{CELL}\" height=\"{CELL}\" fill=\"{fill}\"/>\n"
@@ -265,12 +323,12 @@ pub fn build_svg(
         }
     }
 
-    // ── Type labels ───────────────────────────────────────────────────────────
+    // ── Type labels (main copy) ───────────────────────────────────────────────
     for (r, row) in grid.iter().enumerate() {
         for (c, cell) in row.iter().enumerate() {
             if let Some(cell) = cell {
-                let cx = MARGIN + c as f64 * CELL + CELL / 2.0;
-                let cy = MARGIN + r as f64 * CELL + CELL / 2.0;
+                let cx = MARGIN + (origin_c + c as i32) as f64 * CELL + CELL / 2.0;
+                let cy = MARGIN + (origin_r + r as i32) as f64 * CELL + CELL / 2.0;
                 out += &format!(
                     "  <text x=\"{cx:.1}\" y=\"{cy:.1}\" \
                      font-family=\"monospace\" font-size=\"18\" font-weight=\"bold\" \
@@ -282,15 +340,15 @@ pub fn build_svg(
         }
     }
 
-    // ── Piece boundaries (thick) ──────────────────────────────────────────────
+    // ── Piece boundaries (thick, main copy) ───────────────────────────────────
 
     // Horizontal edges (between row r and r+1)
     for r in 0..disp_rows.saturating_sub(1) {
         for c in 0..disp_cols {
             if id(r, c) != id(r + 1, c) {
-                let x0 = MARGIN + c as f64 * CELL;
+                let x0 = MARGIN + (origin_c + c as i32) as f64 * CELL;
                 let x1 = x0 + CELL;
-                let y = MARGIN + (r + 1) as f64 * CELL;
+                let y = MARGIN + (origin_r + r as i32 + 1) as f64 * CELL;
                 out += &format!(
                     "  <line x1=\"{x0:.1}\" y1=\"{y:.1}\" x2=\"{x1:.1}\" y2=\"{y:.1}\" \
                      stroke=\"#111\" stroke-width=\"{THICK}\" stroke-linecap=\"square\"/>\n"
@@ -302,9 +360,9 @@ pub fn build_svg(
     for r in 0..disp_rows {
         for c in 0..disp_cols.saturating_sub(1) {
             if id(r, c) != id(r, c + 1) {
-                let y0 = MARGIN + r as f64 * CELL;
+                let y0 = MARGIN + (origin_r + r as i32) as f64 * CELL;
                 let y1 = y0 + CELL;
-                let x = MARGIN + (c + 1) as f64 * CELL;
+                let x = MARGIN + (origin_c + c as i32 + 1) as f64 * CELL;
                 out += &format!(
                     "  <line x1=\"{x:.1}\" y1=\"{y0:.1}\" x2=\"{x:.1}\" y2=\"{y1:.1}\" \
                      stroke=\"#111\" stroke-width=\"{THICK}\" stroke-linecap=\"square\"/>\n"
@@ -331,6 +389,7 @@ pub fn write_svg(
     cols: usize,
     shear: usize,
     path: &str,
+    tile_copies: bool,
 ) -> std::io::Result<()> {
     let label = if shear > 0 {
         format!(
@@ -340,7 +399,7 @@ pub fn write_svg(
     } else {
         format!("{}×{} torus — one copy of each tile", rows, cols)
     };
-    if let Some(svg) = build_svg(sol, rows, cols, shear, &label) {
+    if let Some(svg) = build_svg(sol, rows, cols, shear, &label, tile_copies) {
         std::fs::write(path, svg)?;
         println!("  SVG written to {path}");
     }
