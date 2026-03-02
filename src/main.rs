@@ -59,6 +59,9 @@ enum Command {
         /// Write the first solution found to an SVG file at this path
         #[arg(long)]
         svg: Option<String>,
+        /// Write the placement conflict graph in PACE .gr format (for treewidth analysis)
+        #[arg(long)]
+        dump_graph: Option<String>,
         /// Disable ANSI color output
         #[arg(long)]
         no_color: bool,
@@ -156,6 +159,8 @@ struct RunOpts<'a> {
     verbose: bool,
     color: bool,
     svg: Option<&'a str>,
+    /// If Some, write the conflict graph for the first torus tried to this path.
+    dump_graph: Option<&'a str>,
     require_all_types: bool,
 }
 
@@ -181,6 +186,12 @@ fn run_multiset(types: &[PieceType], opts: &RunOpts) -> TripleResult {
             None => Box::new(0..=cols / 2),
         };
         for shear in shears {
+            if let Some(path) = opts.dump_graph {
+                solver::write_conflict_graph(rows, cols, shear, types, path).unwrap();
+                // Only dump the first (rows, cols, shear) triple attempted.
+                return TripleResult::Unknown;
+            }
+
             if opts.verbose {
                 if shear == 0 {
                     print!("  {}×{} ({} pieces)... ", rows, cols, rows * cols / 5);
@@ -252,6 +263,7 @@ fn main() {
             shear,
             verify,
             svg,
+            dump_graph,
             no_color,
             require_all_types,
         } => {
@@ -292,6 +304,7 @@ fn main() {
                 verbose: true,
                 color: !no_color,
                 svg: svg.as_deref(),
+                dump_graph: dump_graph.as_deref(),
                 require_all_types,
             };
             let result = run_multiset(&types, &opts);
@@ -312,7 +325,7 @@ fn main() {
                         println!("(This is computational evidence, not a formal proof — see docs/proof-strategy.md)");
                     }
                 }
-                _ => unreachable!(),
+                TripleResult::Unknown => {} // --dump-graph: graph written, nothing to solve.
             }
         }
 
@@ -375,6 +388,7 @@ fn main() {
                         verbose: false,
                         color: false,
                         svg: None,
+                        dump_graph: None,
                         require_all_types: true,
                     },
                 );

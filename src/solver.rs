@@ -43,52 +43,43 @@ pub struct Solution {
     pub grid_piece: Vec<Vec<Option<usize>>>,
 }
 
-/// Try to find a valid tiling of the rows×cols torus with the given multiset
-/// of piece types, subject to the no-same-color-adjacency constraint.
-///
-/// `types` is a **multiset** (duplicates allowed).  Each index in `types` is
-/// a distinct color.  Two colors with the same shape may be adjacent; two
-/// placements of the *same* color may not.
-///
-/// If `require_all_types` is true, every color in `types` must appear at
-/// least once.  Without this, a sub-set solution would be accepted.
-///
-/// Returns `Some(Solution)` if satisfiable, `None` otherwise.
-pub fn solve(
-    rows: usize,
-    cols: usize,
-    shear: usize,
-    types: &[PieceType],
-    require_all_types: bool,
-) -> Option<Solution> {
-    let all = all_pieces();
+// ── Shared problem setup ──────────────────────────────────────────────────────
 
-    // Enumerate placements for each unique shape that appears in `types`.
+struct Problem {
+    /// Number of placement variables.
+    n: usize,
+    /// global[idx] = (color_index, placement)
+    global: Vec<(usize, crate::placement::Placement)>,
+    /// color_start[c] = first global index for color c.
+    color_start: Vec<usize>,
+    /// color_len[c] = number of placements for color c.
+    color_len: Vec<usize>,
+    /// cell → list of global variable indices covering that cell.
+    cell_to_vars: Vec<Vec<usize>>,
+    /// Same-color adjacent placement pairs (i < j).
+    conflict_pairs: HashSet<(usize, usize)>,
+}
+
+fn build_problem(rows: usize, cols: usize, shear: usize, types: &[PieceType]) -> Option<Problem> {
+    let all = all_pieces();
     let unique_shapes: HashSet<PieceType> = types.iter().cloned().collect();
     let pieces: Vec<_> = all
         .into_iter()
         .filter(|(t, _)| unique_shapes.contains(t))
         .collect();
 
-    // shape_placements[shape] = list of distinct placements for that shape.
     let raw = enumerate_placements(rows, cols, shear, &pieces);
     let mut shape_placements: HashMap<PieceType, Vec<_>> = HashMap::new();
     for p in raw {
         shape_placements.entry(p.piece_type).or_default().push(p);
     }
 
-    // Build global variable table.
-    // global[idx] = (color_index, placement)
-    // For each color (index into `types`), we replicate the shape's placements.
-    // Colors with the same shape get independent copies of the variables.
     let mut global: Vec<(usize, crate::placement::Placement)> = Vec::new();
-    // color_start[c] = first global index for color c (for require_all_types).
     let mut color_start: Vec<usize> = Vec::new();
     let mut color_len: Vec<usize> = Vec::new();
 
     for (color, &pt) in types.iter().enumerate() {
-        let start = global.len();
-        color_start.push(start);
+        color_start.push(global.len());
         if let Some(plist) = shape_placements.get(&pt) {
             for p in plist {
                 global.push((color, p.clone()));
@@ -104,7 +95,6 @@ pub fn solve(
         return None;
     }
 
-    // cell → list of global variable indices covering that cell.
     let mut cell_to_vars: Vec<Vec<usize>> = vec![vec![]; rows * cols];
     for (idx, (_, p)) in global.iter().enumerate() {
         for &(r, c) in &p.cells {
@@ -112,43 +102,22 @@ pub fn solve(
         }
     }
 
-    // Every cell must be coverable.
     if cell_to_vars.iter().any(|v| v.is_empty()) {
         return None;
     }
 
-    let mut solver = Solver::new();
-    let pos = |i: usize| Lit::from_index(i, true);
-    let neg = |i: usize| Lit::from_index(i, false);
-
-    // ── Constraint 1: Exact cover ──────────────────────────────────────────
-    for covers in &cell_to_vars {
-        // At least one variable covers this cell.
-        solver.add_clause(&covers.iter().map(|&i| pos(i)).collect::<Vec<_>>());
-        // At most one (pairwise encoding).
-        for (a, &i) in covers.iter().enumerate() {
-            for &j in &covers[a + 1..] {
-                solver.add_clause(&[neg(i), neg(j)]);
-            }
-        }
-    }
-
-    // ── Constraint 2: No same-color adjacency ─────────────────────────────
     let nbrs = |r: usize, c: usize| neighbours(r, c, rows, cols, shear);
-
     let mut conflict_pairs: HashSet<(usize, usize)> = HashSet::new();
 
     for i in 0..n {
         let (color_i, p1) = &global[i];
         let p1_cells: HashSet<(usize, usize)> = p1.cells.iter().cloned().collect();
-
         let adjacent_cells: HashSet<(usize, usize)> = p1
             .cells
             .iter()
             .flat_map(|&(r, c)| nbrs(r, c))
             .filter(|nc| !p1_cells.contains(nc))
             .collect();
-
         for (ar, ac) in &adjacent_cells {
             for &j in &cell_to_vars[ar * cols + ac] {
                 let (color_j, _) = &global[j];
@@ -159,6 +128,97 @@ pub fn solve(
         }
     }
 
+    Some(Problem {
+        n,
+        global,
+        color_start,
+        color_len,
+        cell_to_vars,
+        conflict_pairs,
+    })
+}
+
+// ── Conflict graph export ─────────────────────────────────────────────────────
+
+/// Write the placement conflict graph in PACE .gr format for treewidth analysis.
+///
+/// Nodes are placement variables (1-indexed).  Edges come from two sources:
+///   - Exact cover: pairs of placements that share a cell (can't both be used).
+///   - Same-color adjacency: pairs of same-color placements that are adjacent.
+///
+/// Feed the output to a treewidth solver such as FlowCutter or TamakiTree.
+pub fn write_conflict_graph(
+    rows: usize,
+    cols: usize,
+    shear: usize,
+    types: &[PieceType],
+    path: &str,
+) -> std::io::Result<()> {
+    let prob = match build_problem(rows, cols, shear, types) {
+        Some(p) => p,
+        None => {
+            eprintln!("write_conflict_graph: no placements (unsatisfiable instance)");
+            return Ok(());
+        }
+    };
+
+    // Collect all edges (overlap from exact cover + same-color adjacency).
+    let mut edges: HashSet<(usize, usize)> = prob.conflict_pairs.clone();
+    for covers in &prob.cell_to_vars {
+        for (a, &i) in covers.iter().enumerate() {
+            for &j in &covers[a + 1..] {
+                let (lo, hi) = if i < j { (i, j) } else { (j, i) };
+                edges.insert((lo, hi));
+            }
+        }
+    }
+
+    let mut out = format!("p tw {} {}\n", prob.n, edges.len());
+    let mut edge_vec: Vec<(usize, usize)> = edges.into_iter().collect();
+    edge_vec.sort_unstable();
+    for (i, j) in edge_vec {
+        out += &format!("{} {}\n", i + 1, j + 1); // PACE is 1-indexed
+    }
+
+    std::fs::write(path, out)?;
+    println!("  Conflict graph: {} nodes, written to {}", prob.n, path);
+    Ok(())
+}
+
+// ── SAT solver ────────────────────────────────────────────────────────────────
+
+pub fn solve(
+    rows: usize,
+    cols: usize,
+    shear: usize,
+    types: &[PieceType],
+    require_all_types: bool,
+) -> Option<Solution> {
+    let prob = build_problem(rows, cols, shear, types)?;
+    let Problem {
+        n: _,
+        global,
+        color_start,
+        color_len,
+        cell_to_vars,
+        conflict_pairs,
+    } = prob;
+
+    let mut solver = Solver::new();
+    let pos = |i: usize| Lit::from_index(i, true);
+    let neg = |i: usize| Lit::from_index(i, false);
+
+    // ── Constraint 1: Exact cover ──────────────────────────────────────────
+    for covers in &cell_to_vars {
+        solver.add_clause(&covers.iter().map(|&i| pos(i)).collect::<Vec<_>>());
+        for (a, &i) in covers.iter().enumerate() {
+            for &j in &covers[a + 1..] {
+                solver.add_clause(&[neg(i), neg(j)]);
+            }
+        }
+    }
+
+    // ── Constraint 2: No same-color adjacency ─────────────────────────────
     for (i, j) in conflict_pairs {
         solver.add_clause(&[neg(i), neg(j)]);
     }
