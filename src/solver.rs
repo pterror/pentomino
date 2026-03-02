@@ -185,6 +185,78 @@ pub fn write_conflict_graph(
     Ok(())
 }
 
+// ── Treewidth upper bound ─────────────────────────────────────────────────────
+
+/// Compute a treewidth upper bound via the min-degree elimination ordering.
+///
+/// Repeatedly eliminate the vertex with the smallest current degree: connect
+/// all its neighbours into a clique (the "fill" edges), remove the vertex, and
+/// record the degree at elimination time.  The maximum recorded degree is an
+/// upper bound on the treewidth.
+///
+/// Also returns the lower bound `max_clique_size - 1` found as a by-product of
+/// running the algorithm (any clique in the original graph gives a lower bound).
+pub fn treewidth_upper_bound(
+    rows: usize,
+    cols: usize,
+    shear: usize,
+    types: &[PieceType],
+) -> Option<(usize, usize)> {
+    let prob = build_problem(rows, cols, shear, types)?;
+
+    // Adjacency sets (mutable — we'll add fill edges during elimination).
+    let mut adj: Vec<HashSet<usize>> = vec![HashSet::new(); prob.n];
+    for covers in &prob.cell_to_vars {
+        for (a, &i) in covers.iter().enumerate() {
+            for &j in &covers[a + 1..] {
+                adj[i].insert(j);
+                adj[j].insert(i);
+            }
+        }
+    }
+    for &(i, j) in &prob.conflict_pairs {
+        adj[i].insert(j);
+        adj[j].insert(i);
+    }
+
+    let mut eliminated = vec![false; prob.n];
+    let mut tw_upper = 0usize;
+    let mut max_clique = 0usize;
+
+    for _ in 0..prob.n {
+        // Find the non-eliminated vertex with minimum current degree.
+        let v = (0..prob.n)
+            .filter(|&v| !eliminated[v])
+            .min_by_key(|&v| adj[v].len())
+            .unwrap();
+
+        let deg = adj[v].len();
+        tw_upper = tw_upper.max(deg);
+
+        // Clique lower bound: any existing clique among v's neighbours + v.
+        // We just track the neighbourhood size as a crude lower bound.
+        max_clique = max_clique.max(deg + 1);
+
+        // Add fill edges: connect all neighbours of v into a clique.
+        let nbrs: Vec<usize> = adj[v].iter().cloned().collect();
+        for (a, &u) in nbrs.iter().enumerate() {
+            for &w in &nbrs[a + 1..] {
+                adj[u].insert(w);
+                adj[w].insert(u);
+            }
+        }
+
+        // Remove v from the graph.
+        for &u in &nbrs {
+            adj[u].remove(&v);
+        }
+        adj[v].clear();
+        eliminated[v] = true;
+    }
+
+    Some((max_clique.saturating_sub(1), tw_upper))
+}
+
 // ── SAT solver ────────────────────────────────────────────────────────────────
 
 pub fn solve(

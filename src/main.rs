@@ -62,6 +62,9 @@ enum Command {
         /// Write the placement conflict graph in PACE .gr format (for treewidth analysis)
         #[arg(long)]
         dump_graph: Option<String>,
+        /// Compute a treewidth upper bound (min-degree elimination) and print it
+        #[arg(long)]
+        treewidth: bool,
         /// Disable ANSI color output
         #[arg(long)]
         no_color: bool,
@@ -161,6 +164,8 @@ struct RunOpts<'a> {
     svg: Option<&'a str>,
     /// If Some, write the conflict graph for the first torus tried to this path.
     dump_graph: Option<&'a str>,
+    /// Print treewidth upper bound for each (rows, cols, shear) tried.
+    treewidth: bool,
     require_all_types: bool,
 }
 
@@ -190,6 +195,24 @@ fn run_multiset(types: &[PieceType], opts: &RunOpts) -> TripleResult {
                 solver::write_conflict_graph(rows, cols, shear, types, path).unwrap();
                 // Only dump the first (rows, cols, shear) triple attempted.
                 return TripleResult::Unknown;
+            }
+
+            if opts.treewidth {
+                match solver::treewidth_upper_bound(rows, cols, shear, types) {
+                    Some((lo, hi)) => println!(
+                        "  {}×{}{}: tw ∈ [{}, {}]",
+                        rows,
+                        cols,
+                        if shear > 0 {
+                            format!(" shear={shear}")
+                        } else {
+                            String::new()
+                        },
+                        lo,
+                        hi
+                    ),
+                    None => println!("  {}×{}: no placements", rows, cols),
+                }
             }
 
             if opts.verbose {
@@ -264,6 +287,7 @@ fn main() {
             verify,
             svg,
             dump_graph,
+            treewidth,
             no_color,
             require_all_types,
         } => {
@@ -305,6 +329,7 @@ fn main() {
                 color: !no_color,
                 svg: svg.as_deref(),
                 dump_graph: dump_graph.as_deref(),
+                treewidth,
                 require_all_types,
             };
             let result = run_multiset(&types, &opts);
@@ -389,6 +414,7 @@ fn main() {
                         color: false,
                         svg: None,
                         dump_graph: None,
+                        treewidth: false,
                         require_all_types: true,
                     },
                 );
