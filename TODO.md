@@ -2,14 +2,8 @@
 
 ## Optimizations (SAT solver path)
 
-- **Translational symmetry breaking** — require color 0 to cover cell (0,0).
-  Any valid tiling can be translated to satisfy this; no solutions lost.
-  Reduces effective search space by up to rows×cols.
-
-- **Color permutation symmetry breaking** — for multisets with repeated types
-  (e.g. [X,X,X,X]), the colors are interchangeable.  Require the
-  lexicographically smallest covered cell of color 0 < color 1 < …
-  Cuts search by up to k! for k identical colors.
+- ~~**Translational symmetry breaking**~~ ✓ done
+- ~~**Color permutation symmetry breaking**~~ ✓ done
 
 - **Better AMO encoding** — current pairwise at-most-one is O(n²) clauses
   per cell.  Commander variable or sequential counter encoding is O(n).
@@ -23,8 +17,7 @@
   Could enumerate once and adjust, instead of calling enumerate_placements
   fresh per shear.
 
-- **run-all shear search** — RunAll currently hardcodes shear=0.
-  Should search all shears 0..=cols/2 like the Solve command does.
+- ~~**run-all shear search**~~ ✓ done
 
 ## Alternative solver approaches
 
